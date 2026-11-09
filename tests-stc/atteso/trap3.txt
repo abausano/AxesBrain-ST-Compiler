@@ -1,0 +1,1 @@
+t=0ms TRAPPOLA 6 in T riga 3: budget di istruzioni superato (ciclo infinito?)

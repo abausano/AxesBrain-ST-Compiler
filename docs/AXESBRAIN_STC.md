@@ -253,3 +253,36 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 5. Regola di numerazione dei merker (`M1.10` → `%MX`).
 6. Ricarica del programma a macchina accesa: fase successiva (seconda istanza della VM, scambio a fine scansione,
    trasferimento dei valori per nome e tipo).
+
+## 13. Stato del prototipo (09/11/2026)
+
+Prototipo 0.1, fuori da AxesBrainSRV.
+
+- **Back-end** in questo repository: `src/backend-stc/` (`stc-format.ts` codici e costanti, `stc-codegen.ts`
+  generatore, `stc-writer.ts` contenitore binario, `cli-stc.ts` riga di comando):
+
+  ```
+  node dist/backend-stc/cli-stc.js programma.st libs/axesbrain/ablib.st -o programma.stc [--json diagnostica.json]
+  ```
+
+- **Libreria standard** `libs/axesbrain/ablib.st`, scritta da zero, licenza MIT: `R_TRIG`, `F_TRIG`, `SR`, `RS`,
+  `CTU`, `CTD`, `CTUD`, `TON`, `TOF`, `TP`, con `AB_TIME()` nativa.
+- **Supportato**: tipi elementari interi, BOOL, REAL, LREAL, TIME; array a una dimensione di elementari; FUNCTION
+  con parametri per posizione e per nome e valori predefiniti; FUNCTION_BLOCK annidati con `=>` per le uscite;
+  PROGRAM; VAR_GLOBAL e VAR_EXTERNAL; CONFIGURATION/RESOURCE/TASK (task predefinito di 10 ms se manca);
+  variabili `AT %I/%Q/%M` (X, B, W, D, L); IF/ELSIF/ELSE, CASE con liste e intervalli, FOR con BY, WHILE, REPEAT,
+  EXIT, RETURN; conversioni `*_TO_*`, `TRUNC`, `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`, `MOVE`, `SHL`, `SHR`, funzioni
+  matematiche, `**`/`EXPT`; funzioni native con `{external native NOME}`; trappole per indice fuori limite,
+  divisione per zero e budget di istruzioni, con la riga del sorgente; simboli e mappa delle righe per il debug.
+- **Non ancora**: STRING/WSTRING, STRUCT, enum, array multidimensionali o di FB, VAR_IN_OUT, REF_TO/POINTER,
+  metodi e interfacce, uscite delle FUNCTION, inizializzatori non costanti, VAR_TEMP reinizializzate a ogni
+  chiamata (ora persistono nell'istanza), RETAIN, breakpoint e forzature (i dati per farli ci sono già).
+- **Semantica allineata al back-end C++**: aritmetica intera troncata a 32 bit per i tipi fino a 32 bit e a 64 per
+  LINT/ULINT, REAL arrotondato a precisione singola dopo ogni operazione, `REAL_TO_INT` con arrotondamento lontano
+  da zero (`std::round`), FOR con limite rivalutato a ogni giro e direzione data dal segno di un passo letterale.
+  Da verificare con le prove di confronto quando ci sarà g++ (WSL).
+- **Prove di regressione** in `tests-stc/`: `STVM=...\stvm-test.exe node tests-stc/esegui.mjs`. Gli output attesi
+  sono stati controllati a mano.
+- **Prestazioni** misurate con la VM di prova (MSVC x64, `/O2`): circa 5–6 ns per istruzione; una scansione con un
+  ciclo di 100 giri su array (~3.700 istruzioni) dura circa 21 µs, il programma `prove1` (~500 istruzioni) circa
+  3 µs, i timer di `lib1` circa 0,6 µs.

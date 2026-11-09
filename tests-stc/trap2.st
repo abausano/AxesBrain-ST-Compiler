@@ -1,0 +1,4 @@
+PROGRAM T
+  VAR z : DINT; q : DINT; END_VAR
+  q := 10 / z;
+END_PROGRAM

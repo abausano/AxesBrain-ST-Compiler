@@ -1,0 +1,17 @@
+[
+  {
+    "nome": "prove1",
+    "sorgenti": ["prove1.st", "../libs/axesbrain/ablib.st"],
+    "argomenti": ["--ms", "40", "--in", "15:%IX0.0=1", "--in", "15:%IW3=21", "--print",
+      "PROVE.I16,PROVE.W,PROVE.D,PROVE.UD,PROVE.UL,PROVE.R,PROVE.LR,PROVE.N1,PROVE.N2,PROVE.N3,PROVE.SCASE,PROVE.SOMMA,PROVE.K,PROVE.REP,PROVE.ARR,PROVE.RISE,PROVE.E1.CHIAMATE,PROVE.MN,PROVE.MX,PROVE.LIM,PROVE.SL,PROVE.TR,PROVE.SH,GCONT,PROVE.ECO,PROVE.AN2"]
+  },
+  {
+    "nome": "lib1",
+    "sorgenti": ["lib1.st", "../libs/axesbrain/ablib.st"],
+    "argomenti": ["--ms", "200", "--every-ms", "10", "--set", "20:L.IN1=1", "--set", "80:L.IN1=0", "--set", "150:L.IN1=1", "--set", "160:L.IN1=0",
+      "--print", "L.IN1,L.T1.Q,L.T1.ET,L.T2.Q,L.T3.Q,L.C1.CV,L.C1.Q,L.FRONTI,L.DISCESE,L.B1.Q1"]
+  },
+  { "nome": "trap1", "sorgenti": ["trap1.st"], "argomenti": ["--ms", "50"] },
+  { "nome": "trap2", "sorgenti": ["trap2.st"], "argomenti": ["--ms", "50"] },
+  { "nome": "trap3", "sorgenti": ["trap3.st"], "argomenti": ["--ms", "50"] }
+]
