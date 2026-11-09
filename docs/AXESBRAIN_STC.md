@@ -240,13 +240,16 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 ## 12. Decisioni aperte
 
 1. Periodo del task predefinito quando manca la CONFIGURATION (proposta: ogni 10 ms).
-2. Uscite di un task fermato da una trappola o da un breakpoint: congelate o a zero.
+2. Uscite di un task fermato da una trappola, da un arresto o da un reset: proposta "a 0" (come OpenPLC e
+   l'opzione "valori di default" di CODESYS). Con un breakpoint: congelate. Da confermare.
 3. Semantica dell'overflow intero e della divisione reale per zero: si fissa con le prove di confronto.
 4. **Lancio del PLC ST** (deciso il 09/11/2026, dettagli nell'analisi di AxesBrainSRV §13): sotto-sistema COM
    numero 6 in `ExecSubSystemProcess` / `KillSubSystemProcess` e negli altri metodi che usano il numero; avvio
-   automatico con `NomePartProgramLancioST` sotto `[ParametriAUTOMAZIONE]`, dopo `Main.pp`. Restano da decidere:
-   `.st` o `.stc` nel nome, comportamento a reset ed emergenza, lancio da un `.pp`, uso dei parametri di
-   `ExecSubSystemProcess`.
+   automatico con `NomePartProgramLancioST` sotto `[ParametriAUTOMAZIONE]`, dopo `Main.pp`. Si lanciano sia `.st`
+   sia `.stc` dalla cartella `partprogST` (valore di registro `PathPartProgramST`): con `.st` la VM confronta l'MD5
+   del sorgente con quello nell'intestazione del `.stc` (§3) e segnala se va ricompilato. Il PLC lanciato da
+   `sistema.txt` non è resettabile; quello lanciato da COM sì, salvo un bit di `iMaskMode`. Lancio da un `.pp`: si
+   decide più avanti.
 5. Regola di numerazione dei merker (`M1.10` → `%MX`).
 6. Ricarica del programma a macchina accesa: fase successiva (seconda istanza della VM, scambio a fine scansione,
    trasferimento dei valori per nome e tipo).
