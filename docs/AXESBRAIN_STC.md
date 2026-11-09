@@ -350,11 +350,13 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 
 ## 12. Decisioni aperte
 
-1. Periodo del task predefinito quando manca la CONFIGURATION (proposta: ogni 10 ms).
-2. Uscite di un task fermato da una trappola, da un arresto o da un reset: proposta "a 0" (come OpenPLC e
-   l'opzione "valori di default" di CODESYS). Con un breakpoint: congelate. Da confermare.
+1. Periodo del task predefinito quando manca la CONFIGURATION: **10 ms** (confermato da Andrea, 09/11/2026).
+2. Uscite di un task fermato da una trappola, da un arresto o da un reset: **a 0** (come OpenPLC e l'opzione
+   "valori di default" di CODESYS), applicato in AxesBrainSRV; i merker restano come sono. Con un breakpoint:
+   congelate (da fare).
 3. Semantica dell'overflow intero e della divisione reale per zero: fissata con le prove di confronto (§4). Dove
-   il C++ di STruC++ si scosta dalla norma o da CODESYS, la VM segue la norma/CODESYS (proposta, da confermare):
+   il C++ di STruC++ si scosta dalla norma o da CODESYS, la VM segue la norma/CODESYS (**confermato da Andrea,
+   09/11/2026**, tutte e sei):
    - `VAR_TEMP` dei FB reinizializzate a ogni chiamata (il C++ le tiene persistenti come membri);
    - `INSERT(IN1, IN2, P)` inserisce dopo il P-esimo carattere (il C++ prima);
    - `CONCAT` non tronca il risultato alla capacità degli argomenti (il C++ sì: `CONCAT` di due STRING(5) dà
@@ -371,7 +373,9 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
    del sorgente con quello nell'intestazione del `.stc` (§3) e segnala se va ricompilato. Il PLC lanciato da
    `sistema.txt` non è resettabile; quello lanciato da COM sì, salvo un bit di `iMaskMode`. Lancio da un `.pp`: si
    decide più avanti.
-5. Regola di numerazione dei merker (`M1.10` → `%MX`).
+5. **Merker** (deciso il 09/11/2026): `%MX` sulle uscite virtuali `Mw.b`, regola lineare che parte da M1.1:
+   `%MX0.0` = `M1.1` … `%MX0.7` = `M1.8`, `%MX1.0` = `M1.9` … `%MX1.7` = `M1.16`, `%MX2.0` = `M2.1` (il front-end
+   accetta solo bit 0…7, come la norma).
 6. Ricarica del programma a macchina accesa: fase successiva (seconda istanza della VM, scambio a fine scansione,
    trasferimento dei valori per nome e tipo).
 
