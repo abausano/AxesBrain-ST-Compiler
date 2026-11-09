@@ -242,9 +242,11 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 1. Periodo del task predefinito quando manca la CONFIGURATION (proposta: ogni 10 ms).
 2. Uscite di un task fermato da una trappola o da un breakpoint: congelate o a zero.
 3. Semantica dell'overflow intero e della divisione reale per zero: si fissa con le prove di confronto.
-4. **Come si lancia un PLC ST**: non solo l'avvio automatico all'accensione (dove indicarlo, non in
-   `sistema.txt`), ma anche il lancio e l'arresto a comando (da HMI, da COM, da un `.pp`?). Da chiedere ad Andrea
-   all'inizio dell'integrazione in AxesBrainSRV.
+4. **Lancio del PLC ST** (deciso il 09/11/2026, dettagli nell'analisi di AxesBrainSRV §13): sotto-sistema COM
+   numero 6 in `ExecSubSystemProcess` / `KillSubSystemProcess` e negli altri metodi che usano il numero; avvio
+   automatico con `NomePartProgramLancioST` sotto `[ParametriAUTOMAZIONE]`, dopo `Main.pp`. Restano da decidere:
+   `.st` o `.stc` nel nome, comportamento a reset ed emergenza, lancio da un `.pp`, uso dei parametri di
+   `ExecSubSystemProcess`.
 5. Regola di numerazione dei merker (`M1.10` → `%MX`).
 6. Ricarica del programma a macchina accesa: fase successiva (seconda istanza della VM, scambio a fine scansione,
    trasferimento dei valori per nome e tipo).
