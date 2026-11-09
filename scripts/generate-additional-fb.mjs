@@ -22,18 +22,18 @@
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
 
 const { compileStlib } = await import(
-  resolve(projectRoot, "dist/library/library-compiler.js")
-);
+    pathToFileURL(resolve(projectRoot, "dist/library/library-compiler.js")).href
+  );
 const { loadLibraryConfig, applyLibraryConfigDocumentation } = await import(
-  resolve(projectRoot, "dist/library/library-config.js")
-);
+    pathToFileURL(resolve(projectRoot, "dist/library/library-config.js")).href
+  );
 
 const sourcesDir = resolve(projectRoot, "libs", "sources", "additional-function-blocks");
 const libsDir    = resolve(projectRoot, "libs");
