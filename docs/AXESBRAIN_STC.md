@@ -1,6 +1,8 @@
-# Formato `.stc` e macchina virtuale AxesBrain (bozza 0.1)
+# Formato `.stc` e macchina virtuale AxesBrain (bozza 0.2)
 
-Stato: **bozza da rivedere** con Andrea, 09/11/2026. Scritta da Claude.
+Stato: **bozza da rivedere** con Andrea, 09/11/2026. Scritta da Claude. Versione del formato **0.2**: frame
+per tutte le POU con immagine iniziale (`FRMI`), STRING, STRUCT, enum, puntatori, array multidimensionali e di FB,
+parametri per indirizzo, nuovi codici operativi (§7.7); cosa cambia rispetto alla 0.1 è in §13.
 Questo documento fa parte del fork GPL `AxesBrain-ST-Compiler` ed è pubblico apposta: il formato `.stc` è una
 specifica indipendente che qualunque compilatore può generare e qualunque VM può eseguire (vedi l'analisi di
 fattibilità in AxesBrainSRV, §11, regola 3). La VM di AxesBrainSRV è un'implementazione separata e non contiene codice
@@ -39,7 +41,7 @@ Binario, little-endian, allineamento a 8 byte delle sezioni.
 | magia | 4 byte | `ABST` |
 | versione formato | u16 maggiore, u16 minore | la VM rifiuta un maggiore diverso |
 | flag | u32 | bit 0: contiene debug |
-| md5 sorgenti | 16 byte | MD5 dei `.st` in ingresso, nell'ordine di compilazione |
+| md5 sorgente | 16 byte | MD5 del file sorgente principale (il primo `.st` sulla riga di comando), byte per byte come su disco; le librerie (`ablib.st`, `--lib`) non contano |
 | versione compilatore | u32 | |
 | numero sezioni | u32 | |
 | riservato | resto | a zero |
@@ -54,6 +56,7 @@ Binario, little-endian, allineamento a 8 byte delle sezioni.
 | `DATA` | dimensione e immagine iniziale del segmento globale (§5) |
 | `POUS` | funzioni, function block, programmi: codice, dimensioni, variabili (§6) |
 | `CODE` | bytecode di tutte le POU (§7) |
+| `FRMI` | immagine iniziale del frame di ogni POU (§6.1), dalla versione 0.2 |
 | `TASK` | task e programmi associati (§8) |
 | `IOMP` | variabili con indirizzo `%I/%Q/%M` (§9) |
 | `NATV` | funzioni native richieste a SRV, per nome e firma (§7.6) |
@@ -73,36 +76,54 @@ Ogni tipo ha un indice nella tabella `TYPE`. Rappresentazione in memoria:
 | INT, UINT, WORD, WCHAR | 2 byte |
 | DINT, UDINT, DWORD, REAL | 4 byte |
 | LINT, ULINT, LWORD, LREAL | 8 byte |
-| TIME, LTIME | 8 byte, nanosecondi con segno (come STruC++) |
-| DATE, TOD, DT e varianti L | 8 byte, nanosecondi (da allineare a STruC++ con le prove) |
-| STRING(n) | u16 lunghezza attuale + n byte + terminatore; n predefinito 254 |
-| WSTRING(n) | u16 lunghezza + 2·(n+1) byte (fase successiva) |
+| TIME, LTIME, TOD, DT e varianti L | 8 byte, nanosecondi con segno (TOD da mezzanotte, DT dal 1970) |
+| DATE | 8 byte, **giorni** dal 1970-01-01 (come STruC++) |
+| STRING(n) | intestazione di 4 byte (`u16` capacità n, `u16` 0) **prima** dei caratteri, poi n+1 byte terminati da NUL; n predefinito 254 |
+| WSTRING(n) | non ancora |
 | enum | intero della dimensione del tipo base (predefinito INT) |
-| ARRAY | elementi contigui; limiti nella tabella dei tipi |
-| STRUCT | campi contigui allineati alla loro dimensione |
-| FB | struttura dell'istanza: input, output, in_out (come riferimenti), locali |
-| REF_TO / POINTER / REFERENCE_TO | 8 byte: indirizzo VM (§5.2) |
+| ARRAY | elementi contigui, per righe (l'ultimo indice varia più in fretta) |
+| STRUCT | campi contigui allineati alla loro dimensione; dimensione arrotondata al massimo allineamento |
+| FB | istanza: input, output, VAR, VAR_IN_OUT (come indirizzi); le VAR_TEMP stanno nel frame |
+| REF_TO / POINTER / REFERENCE_TO | 8 byte: indirizzo VM (§5.2); `SIZEOF` di un puntatore vale 4 (§12) |
 
-Aritmetica intera: **complemento a due con troncamento alla dimensione del tipo** (come il C++ generato su x64).
-Da confermare con le prove di confronto.
+**Indirizzo di una STRING**: è quello del primo carattere, come in CODESYS, perché OSCAT legge e scrive le
+stringhe con `ADR()` e puntatori a BYTE. La lunghezza è la posizione del primo NUL (al massimo n); la capacità è
+nei 4 byte prima. Assegnamenti e funzioni troncano alla capacità della destinazione.
+
+Aritmetica intera: **complemento a due come il C++ generato su x64**: gli operandi più stretti di 32 bit sono
+promossi a `int`, il risultato è troncato a 32 bit (o 64 per LINT/ULINT) e poi alla dimensione della variabile
+che lo riceve. A parità di dimensione vince il tipo senza segno. Verificato con le prove di confronto (§13).
+
+Reali: un letterale senza tipo (`0.1`) è LREAL; un'operazione tra REAL resta a precisione singola (arrotondata
+dopo ogni operazione), tra REAL e LREAL è a precisione doppia, come il C++ `float`/`double`. `REAL_TO_INT` e
+simili arrotondano lontano da zero (`std::round`), l'assegnamento implicito reale → intero tronca. Divisione
+reale per zero: ±INF o NaN (IEEE).
+
+Conversioni dei tipi di tempo verso numeri e ritorno (come CODESYS e STruC++): TIME e TOD in millisecondi,
+DT e DATE in secondi.
 
 ## 5. Modello di memoria
 
 ### 5.1 Segmenti
 
 - **Globale (G)**: un blocco unico allocato al caricamento. Contiene `VAR_GLOBAL`, istanze dei PROGRAM (una per
-  istanza dichiarata in CONFIGURATION), variabili con indirizzo, e dentro le istanze tutte le istanze di FB.
-  Le istanze di FB non vivono mai sullo stack: sono parte dei dati del proprietario, come in IEC.
-- **Stack delle chiamate**: un blocco per task, dimensione calcolata dal compilatore (profondità massima delle
-  chiamate; la ricorsione è vietata dalla norma e rifiutata). Contiene i frame delle FUNCTION (parametri, locali,
-  `VAR_TEMP`, valore di ritorno) e i `VAR_TEMP` di FB e PROGRAM.
+  istanza dichiarata in CONFIGURATION), variabili con indirizzo, dentro le istanze tutte le istanze di FB, e in
+  fondo le costanti STRING usate dal codice.
+  Le istanze di FB sono parte dei dati del proprietario, come in IEC; un FB dichiarato nelle VAR di una FUNCTION
+  vive nel frame della FUNCTION (come in CODESYS, si reinizializza a ogni chiamata).
+- **Stack delle chiamate**: un blocco per task (256 KB nella VM di prova; la ricorsione è vietata dalla norma).
+  **Ogni POU ha un frame**, creato a ogni chiamata copiandoci l'immagine iniziale della sezione `FRMI` (§6.1):
+  FUNCTION (risultato, parametri, locali, `VAR_TEMP`), FB e PROGRAM (`VAR_TEMP`), più i temporanei nascosti del
+  compilatore. Le `VAR_TEMP` ripartono quindi dal valore iniziale a ogni chiamata.
 - **Pila degli operandi**: slot da 8 byte, profondità massima calcolata dal compilatore per POU.
 
 ### 5.2 Indirizzi
 
-Un indirizzo VM è un intero a 64 bit: segmento (4 bit alti) + offset. I `REF_TO`, i parametri `VAR_IN_OUT` e gli
-output di FB passati per riferimento usano questi indirizzi; la VM verifica segmento e limiti a ogni accesso
-indiretto.
+Un indirizzo VM è un intero a 64 bit: segmento negli 8 bit alti (1 globale, 2 stack) + offset; 0 è `NULL` e non
+è mai valido (trappola 4). Gli indirizzi sono interni alla VM: non vanno salvati né confrontati tra due caricamenti. I puntatori, i
+`REF_TO`, i parametri `VAR_IN_OUT` e quelli passati per indirizzo (§6.2) usano questi indirizzi; la VM verifica
+segmento e limiti a ogni accesso indiretto. L'aritmetica dei puntatori conta **byte**, come CODESYS
+(`ADR(a[2]) + 2` con `a : ARRAY OF INT` punta ad `a[3]`).
 
 ### 5.3 Basi degli accessi diretti
 
@@ -121,8 +142,32 @@ Per ogni POU: tipo (FUNCTION, FUNCTION_BLOCK, PROGRAM, METHOD), nome, offset e l
 del frame, dimensione dell'istanza (FB/PROGRAM), profondità massima della pila degli operandi, elenco delle
 variabili (nome, sezione VAR_*, tipo, offset) per debug e per le chiamate con parametri per nome.
 
-Inizializzazione: l'immagine iniziale del segmento globale (`DATA`) contiene già tutti i valori iniziali, comprese
-le istanze di FB. I frame delle FUNCTION sono inizializzati dal codice della POU stessa (prologo generato).
+Formato 0.2 di ogni voce: `u8 tipo, u32 offset codice, u32 lunghezza codice, u32 dimensione frame,
+u32 dimensione istanza, u8 n, {u8 kind, u32 offset nel frame}·n` (i parametri passati in pila, in ordine),
+`u8 retKind, u32 retOff, str nome`. `retKind` è il kind del risultato elementare, 0 se non c'è, **11** se il
+risultato è una STRING/STRUCT/ARRAY restituita per indirizzo (§6.2). Le POU che il programma non usa compaiono
+con codice vuoto e frame 0 (gli indici delle POU restano stabili); con `--tutto` il compilatore le genera tutte.
+
+### 6.1 Inizializzazione (`DATA`, `FRMI`)
+
+L'immagine iniziale del segmento globale (`DATA`) contiene già tutti i valori iniziali, comprese le istanze di FB
+e le capacità delle STRING. La sezione `FRMI` (`u32 n; {u16 pou, u32 lunghezza, byte}·n`) contiene per ogni POU
+l'immagine iniziale del frame: valori iniziali di locali e `VAR_TEMP`, capacità delle STRING locali e dei
+temporanei. A ogni chiamata la VM copia l'immagine nel nuovo frame (zeri se manca), poi scrive i parametri.
+
+### 6.2 Passaggio dei parametri
+
+| Parametro | Il chiamante mette in pila | La POU chiamata |
+|---|---|---|
+| VAR_INPUT elementare | il valore (il predefinito se manca) | lo trova nel frame |
+| VAR_INPUT STRING/STRUCT/ARRAY | l'indirizzo del valore (0 se manca) | lo copia in una sua variabile nel prologo; con 0 tiene il valore iniziale |
+| VAR_IN_OUT | l'indirizzo della variabile | vi accede per indirizzo |
+| VAR_OUTPUT di FUNCTION | l'indirizzo della variabile di destinazione (0 se non collegata) | lavora su una copia locale e la scrive alla fine (epilogo), anche dopo `RETURN` |
+| risultato STRING/STRUCT/ARRAY | — | `RET` mette in pila l'indirizzo del risultato nel frame appena liberato; il chiamante lo copia subito |
+
+Per i FB, come prima: gli input si scrivono nell'istanza, i `VAR_IN_OUT` come indirizzi nell'istanza, poi
+`ADDR` dell'istanza e `CALLFB`; le uscite `=>` si leggono dall'istanza dopo la chiamata. L'istanza può essere
+calcolata (`cnt[i](...)`, array di FB).
 
 ## 7. Bytecode
 
@@ -149,17 +194,19 @@ i32). Il tipo è parte del codice operativo (niente controllo dei tipi a run-tim
 | Sistema | `NOP`, `BRK` (breakpoint, §10), `TRAP code` | |
 
 Le espressioni di tipo più piccolo di 32 bit si calcolano a 32 o 64 bit e si troncano alla scrittura, come
-prevede la promozione degli interi.
+prevede la promozione degli interi. La tabella sopra è il progetto; i codici effettivi della 0.2 sono in §7.7.
 
 ### 7.2 Chiamata di FUNCTION
 
-Il chiamante riserva il frame, scrive i parametri nel frame del chiamato (per posizione o per nome: il compilatore
-risolve gli offset), esegue `CALL`. Il valore di ritorno è nello slot 0 del frame e viene messo in pila al `RET`.
+Il chiamante mette in pila i parametri nell'ordine di dichiarazione (per posizione o per nome: il compilatore
+li riordina; §6.2), esegue `CALL`. La VM crea il frame dall'immagine `FRMI`, vi scrive i parametri, e al `RET`
+mette in pila il risultato (slot 0 del frame) o il suo indirizzo (`retKind` 11).
 
 ### 7.3 Chiamata di FUNCTION_BLOCK
 
-Il compilatore scrive gli input direttamente nell'istanza (sono campi del segmento globale), poi `ADDR` istanza e
-`CALLFB`; dopo la chiamata legge gli output dall'istanza. `VAR_IN_OUT`: si scrive l'indirizzo nell'istanza.
+Il compilatore scrive gli input direttamente nell'istanza, poi `ADDR` istanza e `CALLFB`; la VM crea il frame
+del FB (per le `VAR_TEMP`); dopo la chiamata il compilatore legge gli output dall'istanza. `VAR_IN_OUT`: si
+scrive l'indirizzo nell'istanza.
 
 ### 7.4 Controlli a run-time
 
@@ -193,9 +240,70 @@ segnala (evento di errore verso l'HMI). Cosa fare delle uscite del task fermo è
   delle funzioni host di SRV; nome mancante o firma diversa → il programma non si carica.
 - Le native non possono bloccare la scansione: le operazioni lunghe (lancio di un `.pp`, movimenti) restituiscono
   un handle e lo stato si legge nelle scansioni successive (FB `MC_*` in tre tempi, analisi §8.3).
-- Native fornite dalla VM stessa (non da SRV): funzioni standard su stringhe (`LEN`, `LEFT`, `RIGHT`, `MID`,
-  `CONCAT`, `INSERT`, `DELETE`, `REPLACE`, `FIND`), matematiche (`SQRT`, `LN`, `LOG`, `EXP`, `SIN`…), e
-  `AB_TIME()`, il tempo all'inizio della scansione, uguale per tutta la scansione (usato dai timer).
+- Native fornite dalla VM stessa (non da SRV), come codici operativi: funzioni standard su stringhe (`STR`,
+  §7.7) e matematiche (`MATH`). Da SRV serve solo `AB_TIME()`, il tempo all'inizio della scansione, uguale per
+  tutta la scansione (usato dai timer); il compilatore la usa anche per la funzione CODESYS `TIME()`.
+- Una FUNCTION dichiarata nei sorgenti ha sempre la precedenza su una standard con lo stesso nome (OSCAT
+  definisce `CHR_TO_STRING`, `FLOOR`, `CEIL`…).
+
+### 7.7 Codici operativi (formato 0.2)
+
+Immediati little-endian. `kind` è il kind di §3.4 della VM (1 U8 … 10 F64), `base` è quella di §5.3.
+
+| Codice | Nome | Immediati | Pila (prima → dopo) |
+|---|---|---|---|
+| 0x00 | NOP | | |
+| 0x01 | PUSHI | i64 | → v |
+| 0x02 | PUSHF | f64 | → v |
+| 0x03 | POP | | v → |
+| 0x04 | DUP | | v → v v |
+| 0x05 | LD | u8 kind, u8 base, u32 off | (indirizzo se base P) → v |
+| 0x06 | ST | u8 kind, u8 base, u32 off | (indirizzo se base P) v → |
+| 0x07 | ADDR | u8 base, u32 off | → indirizzo |
+| 0x08 | IDX | i32 lo, i32 hi, u32 passo | indirizzo, indice → indirizzo (trappola fuori limite) |
+| 0x09 | COPY | u32 n | destinazione, sorgente → (memmove di n byte) |
+| 0x0a | SWAP | | a b → b a |
+| 0x10–0x18 | ADDI SUBI MULI DIVI DIVU MODI MODU NEGI ABSI | | interi a 64 bit; DIV/MOD per 0 → trappola |
+| 0x19–0x1d | ADDF SUBF MULF DIVF NEGF | | reali in doppia precisione |
+| 0x1e | F32R | | arrotonda a precisione singola |
+| 0x1f | TRUNC | u8 kind | tronca l'intero alla dimensione del kind |
+| 0x20–0x29 | EQI NEI LTI LEI GTI GEI LTU LEU GTU GEU | | a b → BOOL |
+| 0x2a–0x2f | EQF NEF LTF LEF GTF GEF | | a b → BOOL |
+| 0x30–0x34 | AND OR XOR NOTB NOTI | | |
+| 0x35, 0x36, 0x46 | SHL SHR SAR | | v n → v (SAR: SHR dei tipi con segno) |
+| 0x37–0x3c | MINI MAXI MINU MAXU MINF MAXF | | |
+| 0x3d | SEL | | g in0 in1 → (g ? in1 : in0) |
+| 0x3e, 0x3f | ROL ROR | u8 bit | v n → v ruotato su 8/16/32/64 bit |
+| 0x40–0x43 | I2F U2F F2I F2IR | | F2I tronca, F2IR arrotonda lontano da zero |
+| 0x44 | MATH | u8 funzione | 1 SQRT 2 LN 3 LOG 4 EXP 5 SIN 6 COS 7 TAN 8 ASIN 9 ACOS 10 ATAN 11 POW 12 ABS 13 FLOOR 14 ATAN2 |
+| 0x45 | STR | u8 funzione | funzioni stringa, tabella sotto |
+| 0x50–0x52 | JMP JZ JNZ | i32 relativo all'istruzione seguente | |
+| 0x60 | CALL | u16 pou | parametri → (risultato) |
+| 0x61 | CALLFB | u16 pou | indirizzo istanza → |
+| 0x62 | RET | | |
+| 0x63 | NATIVE | u16 indice NATV | parametri → (risultato) |
+| 0x70, 0x71 | BRK TRAP | —, u8 codice | |
+
+Funzioni `STR` (gli operandi STRING sono indirizzi del primo carattere; `d` è la destinazione, il risultato è
+troncato alla sua capacità; posizioni da 1 come IEC, interpretate senza segno come il C++):
+
+| n | Funzione | Pila | Note |
+|---|---|---|---|
+| 1 | ASSIGN | d s → | anche con d e s sovrapposte |
+| 2 | CONCAT | d a b → | `CONCAT(a, b, c…)` si genera a coppie |
+| 3 | LEN | a → n | |
+| 4, 5 | LEFT, RIGHT | d a n → | |
+| 6 | MID | d a L P → | P = 0 → vuota |
+| 7 | INSERT | d a b P → | b **dopo** il P-esimo carattere (IEC: `INSERT('ABC','XY',2)` = `'ABXYC'`) |
+| 8 | DELETE | d a L P → | |
+| 9 | REPLACE | d a b L P → | |
+| 10 | FIND | a b → posizione | 0 se assente o b vuota |
+| 11 | CMP | a b → −1/0/1 | per `= <> < <= > >=` tra STRING |
+| 12–15 | FROM_INT, FROM_UINT, FROM_REAL, FROM_LREAL | d v → | `%lld`, `%llu`, `%g` come `TO_STRING` di STruC++ |
+| 16, 17 | TO_INT, TO_REAL | a → v | `strtoll`/`strtod` |
+| 18, 19 | FROM_BOOL, FROM_TIME | d v → | `TRUE`/`FALSE`; TIME in ns come numero (da rivedere) |
+| 20 | CHR | d codice → | stringa di un carattere |
+| 21 | CODE | a P → codice | 0 fuori limite |
 
 ## 8. Task (`TASK`)
 
@@ -220,7 +328,10 @@ globale, tipo.
 ## 10. Debug (`DBUG`)
 
 - **Simboli**: nome gerarchico (`Main.Ciclo.Pezzi`, `Main.T1.Q`), tipo, segmento, offset. Bastano per lettura e
-  forzatura per nome.
+  forzatura per nome. Formato 0.2: `str nome, u8 kind, u32 offset, u32 conteggio`; `kind` 11 = STRING (offset
+  del primo carattere, capacità nei 4 byte prima); un array di elementari o di STRING è un solo simbolo col
+  conteggio degli elementi (per righe); gli array di STRUCT o di FB si espandono per elemento (`Main.M[1,2].X`).
+  I `VAR_IN_OUT` (indirizzi) non sono simboli.
 - **Mappa righe**: per ogni POU, coppie (offset nel codice → file, riga, colonna) all'inizio di ogni istruzione ST.
 - **Breakpoint**: la VM sostituisce il primo codice operativo della riga con `BRK` e conserva l'originale. Al
   `BRK` il task si sospende a fine istruzione corrente; con un PLC a scansione le uscite restano congelate (decisione
@@ -242,7 +353,17 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 1. Periodo del task predefinito quando manca la CONFIGURATION (proposta: ogni 10 ms).
 2. Uscite di un task fermato da una trappola, da un arresto o da un reset: proposta "a 0" (come OpenPLC e
    l'opzione "valori di default" di CODESYS). Con un breakpoint: congelate. Da confermare.
-3. Semantica dell'overflow intero e della divisione reale per zero: si fissa con le prove di confronto.
+3. Semantica dell'overflow intero e della divisione reale per zero: fissata con le prove di confronto (§4). Dove
+   il C++ di STruC++ si scosta dalla norma o da CODESYS, la VM segue la norma/CODESYS (proposta, da confermare):
+   - `VAR_TEMP` dei FB reinizializzate a ogni chiamata (il C++ le tiene persistenti come membri);
+   - `INSERT(IN1, IN2, P)` inserisce dopo il P-esimo carattere (il C++ prima);
+   - `CONCAT` non tronca il risultato alla capacità degli argomenti (il C++ sì: `CONCAT` di due STRING(5) dà
+     5 caratteri);
+   - aritmetica dei puntatori in byte (il C++ in elementi del suo tipo involucro);
+   - `SIZEOF` di un puntatore vale 4 come in CODESYS a 32 bit, perché OSCAT lo usa come passo degli array di
+     REAL (`ARRAY_MAX`, `ARRAY_MIN`, `ARRAY_SUM`, `ARRAY_SPR`, `_ARRAY_SORT`, `_ARRAY_MEDIAN`);
+   - `NOT` di un'espressione BOOL è sempre logico (il C++ genera in qualche caso un NOT bit a bit e `GCD` di
+     OSCAT non termina).
 4. **Lancio del PLC ST** (deciso il 09/11/2026, dettagli nell'analisi di AxesBrainSRV §13): sotto-sistema COM
    numero 6 in `ExecSubSystemProcess` / `KillSubSystemProcess` e negli altri metodi che usano il numero; avvio
    automatico con `NomePartProgramLancioST` sotto `[ParametriAUTOMAZIONE]`, dopo `Main.pp`. Si lanciano sia `.st`
@@ -256,33 +377,66 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 
 ## 13. Stato del prototipo (09/11/2026)
 
-Prototipo 0.1, fuori da AxesBrainSRV.
+Prototipo 0.2 (formato `.stc` 0.2), fuori da AxesBrainSRV.
 
 - **Back-end** in questo repository: `src/backend-stc/` (`stc-format.ts` codici e costanti, `stc-codegen.ts`
   generatore, `stc-writer.ts` contenitore binario, `cli-stc.ts` riga di comando):
 
   ```
   node dist/backend-stc/cli-stc.js programma.st libs/axesbrain/ablib.st -o programma.stc [--json diagnostica.json]
+       [--lib libs/oscat-basic.stlib] [-D NOME=valore] [--tutto]
   ```
 
+  `--lib` aggiunge i sorgenti ST e le costanti di un archivio `.stlib` (OSCAT); `--tutto` genera il codice di
+  tutte le POU, non solo di quelle usate dai programmi. Gli errori del generatore sono raccolti POU per POU.
 - **Libreria standard** `libs/axesbrain/ablib.st`, scritta da zero, licenza MIT: `R_TRIG`, `F_TRIG`, `SR`, `RS`,
-  `CTU`, `CTD`, `CTUD`, `TON`, `TOF`, `TP`, con `AB_TIME()` nativa.
-- **Supportato**: tipi elementari interi, BOOL, REAL, LREAL, TIME; array a una dimensione di elementari; FUNCTION
-  con parametri per posizione e per nome e valori predefiniti; FUNCTION_BLOCK annidati con `=>` per le uscite;
-  PROGRAM; VAR_GLOBAL e VAR_EXTERNAL; CONFIGURATION/RESOURCE/TASK (task predefinito di 10 ms se manca);
-  variabili `AT %I/%Q/%M` (X, B, W, D, L); IF/ELSIF/ELSE, CASE con liste e intervalli, FOR con BY, WHILE, REPEAT,
-  EXIT, RETURN; conversioni `*_TO_*`, `TRUNC`, `ABS`, `MIN`, `MAX`, `LIMIT`, `SEL`, `MOVE`, `SHL`, `SHR`, funzioni
-  matematiche, `**`/`EXPT`; funzioni native con `{external native NOME}`; trappole per indice fuori limite,
-  divisione per zero e budget di istruzioni, con la riga del sorgente; simboli e mappa delle righe per il debug.
-- **Non ancora**: STRING/WSTRING, STRUCT, enum, array multidimensionali o di FB, VAR_IN_OUT, REF_TO/POINTER,
-  metodi e interfacce, uscite delle FUNCTION, inizializzatori non costanti, VAR_TEMP reinizializzate a ogni
-  chiamata (ora persistono nell'istanza), RETAIN, breakpoint e forzature (i dati per farli ci sono già).
-- **Semantica allineata al back-end C++**: aritmetica intera troncata a 32 bit per i tipi fino a 32 bit e a 64 per
-  LINT/ULINT, REAL arrotondato a precisione singola dopo ogni operazione, `REAL_TO_INT` con arrotondamento lontano
-  da zero (`std::round`), FOR con limite rivalutato a ogni giro e direzione data dal segno di un passo letterale.
-  Da verificare con le prove di confronto quando ci sarà g++ (WSL).
-- **Prove di regressione** in `tests-stc/`: `STVM=...\stvm-test.exe node tests-stc/esegui.mjs`. Gli output attesi
-  sono stati controllati a mano.
-- **Prestazioni** misurate con la VM di prova (MSVC x64, `/O2`): circa 5–6 ns per istruzione; una scansione con un
-  ciclo di 100 giri su array (~3.700 istruzioni) dura circa 21 µs, il programma `prove1` (~500 istruzioni) circa
-  3 µs, i timer di `lib1` circa 0,6 µs.
+  `CTU`, `CTD`, `CTUD`, `TON`, `TOF`, `TP`, con `AB_TIME()` nativa. Va compilata insieme a OSCAT al posto
+  di `iec-standard-fb`.
+- **Supportato** (oltre a quanto c'era nella 0.1: elementari, FUNCTION/FB/PROGRAM, globali, task, I/O, controlli,
+  conversioni, matematiche, native, trappole, debug):
+  - `VAR_TEMP` (FUNCTION, FB, PROGRAM) reinizializzate a ogni chiamata; locali delle FUNCTION con valore iniziale
+    di qualunque tipo (immagine `FRMI`);
+  - `STRING` e `STRING(n)` (anche con costante per la lunghezza), letterali con `$`, assegnamento con
+    troncamento, confronti `= <> < <= > >=`, `LEN LEFT RIGHT MID CONCAT` (anche con più argomenti) `INSERT DELETE
+    REPLACE FIND`, `*_TO_STRING` e `STRING_TO_*` numerici, `CHR`; STRING come parametri, risultati, campi,
+    elementi di array, `VAR_IN_OUT` di qualunque lunghezza;
+  - `TYPE`: `STRUCT` (annidate, con array e STRING, valori iniziali dei campi), enum (anche con valori espliciti,
+    tipo base, `Tipo#Valore`, in `CASE`), array con nome, sottointervalli, alias;
+  - array a più dimensioni e array di array, di STRUCT, di STRING, di FB (`cnt[i](...)`);
+  - `VAR_IN_OUT` di FUNCTION e FB, `VAR_OUTPUT` delle FUNCTION (`F(x, Q => q)`), risultato STRUCT/ARRAY/STRING;
+  - `POINTER TO`, `REF_TO`, `REFERENCE TO`, `ADR`, `REF`, `^`, `NULL`, aritmetica dei puntatori in byte,
+    `SIZEOF`, `LOWER_BOUND`/`UPPER_BOUND`, accesso ai bit `x.3` in lettura e scrittura;
+  - inizializzatori di array (con ripetizioni `3(0)`) e di STRUCT/FB (`(y := 7)`), costanti calcolate, costanti
+    globali (`VAR_GLOBAL CONSTANT`, `-D`), DATE/TOD/DT e conversioni temporali come CODESYS, `TIME()`;
+  - `ROL ROR MUX ODD`, gli operatori scritti come funzioni (`NOT(x)`, `ADD(a, b, c)`, `GT(a, b)`...).
+- **OSCAT BASIC 3.35**: con `--lib libs/oscat-basic.stlib --tutto` si compilano **tutte** le 557 POU (560 file,
+  compreso `GVL_0`) in un `.stc` di circa 310 KB che la VM carica. Unica nativa richiesta: `AB_TIME`. Provate a
+  run-time (§10, `tests-stc/confronto/osc1.st` e `osc2.st`): circa 45 funzioni e FB di matematica, array,
+  stringhe, date, bit, numeri complessi, regolazione e temporizzazione.
+- **Non ancora**: `WSTRING`, `ARRAY[*]`, metodi, interfacce, `EXTENDS`, proprietà, `VAR_INST`, `__NEW`/
+  `__DELETE`, `RETAIN`, task a evento, `TIME_TO_STRING` e `DT_TO_STRING` nel formato IEC (ora numerici), STRING
+  passate alle native di SRV, breakpoint e forzature (i dati per farli ci sono).
+- **Prove di confronto col back-end C++** (`tests-stc/confronto.mjs`, g++ 13.2 di WSL): stesso sorgente compilato
+  nei due modi, tutte le variabili confrontate a ogni ciclo.
+
+  | Caso | Contenuto | Esito |
+  |---|---|---|
+  | `sem1` | overflow di tutti i tipi interi, misti con e senza segno, REAL/LREAL, divisione reale per 0, conversioni implicite ed esplicite, SHL/SHR/ROL/ROR, MUX/SEL/LIMIT, TIME, FOR | uguale (96 variabili × 12 cicli; 1 LREAL diverso nell'ultima cifra: `ATAN`/`TAN` di glibc e di MSVC) |
+  | `str1` | STRING e funzioni stringa | uguale, salvo le scelte di §12.3 (`INSERT`, `CONCAT`) |
+  | `agg1` | STRUCT, enum, array 2D/3D, uscite di FUNCTION, VAR_IN_OUT, ritorno STRUCT, array di FB | uguale, salvo `VAR_TEMP` dei FB (§12.3) |
+  | `pun1` | puntatori, REF_TO, bit | uguale, salvo l'aritmetica dei puntatori (§12.3) |
+  | `osc1` | OSCAT: matematica, date, bit, complessi, `CTRL_PI`, `CLK_DIV`, `FIFO_16`, `HYST`, `TP_X`, `FT_PT1` | uguale (152 variabili × 12 cicli) |
+
+  Le funzioni OSCAT che scrivono tramite puntatori (`osc2`: `ARRAY_AVG`, `ARRAY_MAX`, `_ARRAY_SORT`,
+  `DWORD_TO_STRH`, `FILL`, `REAL_TO_STRF`, `GCD`) **non** sono confrontabili: nel C++ di STruC++ danno valori
+  senza senso o non terminano. Lì i valori della VM sono stati controllati a mano e fissati come regressione.
+  Il C++ di STruC++ non compila inoltre `CONCAT` a più di due argomenti di tipo misto, `>=` tra STRING, un
+  `VAR_IN_OUT` STRING legato a una STRING(n), un parametro `POINTER TO BYTE`, e con la libreria OSCAT da
+  `.stlib` chiede come parametri le variabili locali delle funzioni: le prove aggirano questi limiti.
+- **Prove di regressione** (`STVM=...stvm-test.exe node tests-stc/esegui.mjs`, senza WSL): 15 casi, compresi i
+  casi di confronto con le uscite già validate e le trappole (indice fuori limite in un array 2D di STRUCT,
+  puntatore nullo).
+- **Prestazioni** con la VM di prova (MSVC x64, `/O2`, misurate con g++ in esecuzione in parallelo): circa 4–5 ns
+  per istruzione. `bench1` (~3.700 istruzioni) 14–15 µs per scansione (21 µs nella 0.1), `prove1` 2,1 µs, timer di
+  `lib1` 0,55 µs, `agg1` 3,4 µs, `osc1` (~1.950 istruzioni, 6 FB OSCAT e ~25 funzioni) 7,5 µs, `osc2` (stringhe e
+  ordinamento OSCAT, ~4.900 istruzioni) 22–26 µs.

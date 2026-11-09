@@ -1,0 +1,80 @@
+[
+  {
+    "nome": "sem1",
+    "sorgenti": [
+      "confronto/sem1.st"
+    ],
+    "cicli": 12
+  },
+  {
+    "nome": "str1",
+    "sorgenti": [
+      "confronto/str1.st"
+    ],
+    "cicli": 10,
+    "attesoDiverso": [
+      {
+        "motivo": "CONCAT di due STRING(5): il C++ tronca il risultato a 5 caratteri (tipo del template), la VM no (come CODESYS)",
+        "variabili": [
+          "STR.S10"
+        ]
+      },
+      {
+        "motivo": "INSERT: la norma (e CODESYS) inserisce dopo il carattere P, INSERT('abc','XY',2) = 'abXYc'; il runtime C++ di STruC++ inserisce prima ('aXYbc')",
+        "variabili": [
+          "STR.S6"
+        ]
+      }
+    ]
+  },
+  {
+    "nome": "agg1",
+    "sorgenti": [
+      "confronto/agg1.st"
+    ],
+    "cicli": 10,
+    "attesoDiverso": [
+      {
+        "motivo": "VAR_TEMP dei FB: il C++ di STruC++ le tiene come membri persistenti, la VM le reinizializza a ogni chiamata (IEC 61131-3)",
+        "variabili": [
+          "AGG.CNT[0].N",
+          "AGG.CNT[1].N",
+          "AGG.CNT[2].N",
+          "AGG.TOT"
+        ]
+      }
+    ]
+  },
+  {
+    "nome": "pun1",
+    "sorgenti": [
+      "confronto/pun1.st"
+    ],
+    "cicli": 8,
+    "escludi": [
+      "PUN.PI",
+      "PUN.R",
+      "PUN.PB"
+    ],
+    "attesoDiverso": [
+      {
+        "motivo": "aritmetica dei puntatori: CODESYS e la VM sommano byte (ADR(a[2]) + 2 = a[3]), il C++ di STruC++ somma elementi del tipo involucro IECVar",
+        "variabili": [
+          "PUN.X",
+          "PUN.B"
+        ]
+      }
+    ]
+  },
+  {
+    "nome": "osc1",
+    "sorgenti": [
+      "confronto/osc1.st",
+      "../libs/axesbrain/ablib.st"
+    ],
+    "cicli": 12,
+    "librerie": [
+      "../libs/oscat-basic.stlib"
+    ]
+  }
+]

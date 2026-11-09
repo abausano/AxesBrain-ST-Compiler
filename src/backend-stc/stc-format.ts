@@ -6,12 +6,12 @@
 // copied into it, may be distributed under terms of your choice.
 /**
  * AxesBrain .stc format: shared constants (see docs/AXESBRAIN_STC.md).
- * Prototype version 0.1: a first subset of the format.
+ * Format version 0.2.
  */
 
 export const STC_MAGIC = "ABST";
 export const STC_VERSION_MAJOR = 0;
-export const STC_VERSION_MINOR = 1;
+export const STC_VERSION_MINOR = 2;
 
 /** Value kinds: memory representation of an elementary value. */
 export enum Kind {
@@ -21,11 +21,18 @@ export enum Kind {
   I16 = 4, // INT
   U32 = 5, // DWORD, UDINT
   I32 = 6, // DINT
-  I64 = 7, // LINT, TIME, LTIME, DATE, TOD, DT
+  I64 = 7, // LINT, TIME, LTIME, DATE, TOD, DT, pointers
   U64 = 8, // LWORD, ULINT
   F32 = 9, // REAL
   F64 = 10, // LREAL
 }
+
+/** Symbol kind for STRING variables (DBUG section). */
+export const SYM_STRING = 11;
+/** Return kind of a FUNCTION whose result is a STRING, STRUCT or ARRAY. */
+export const RET_ADDR = 11;
+/** Bytes of the STRING header placed before the characters (u16 cap, u16 0). */
+export const STR_HEADER = 4;
 
 export function kindSize(k: Kind): number {
   switch (k) {
@@ -47,7 +54,7 @@ export function kindSize(k: Kind): number {
 /** Address bases for direct loads and stores. */
 export enum Base {
   G = 0, // global segment, absolute offset
-  F = 1, // current function frame
+  F = 1, // current frame
   I = 2, // current instance (PROGRAM / FUNCTION_BLOCK)
   P = 3, // address popped from the operand stack
 }
@@ -63,6 +70,8 @@ export enum Op {
   ST = 0x06, // u8 kind, u8 base, u32 off   (P: address below value)
   ADDR = 0x07, // u8 base, u32 off -> absolute address
   IDX = 0x08, // i32 lo, i32 hi, u32 elemSize: addr, index -> addr (bounds trap)
+  COPY = 0x09, // u32 size: dst, src -> (memmove)
+  SWAP = 0x0a,
   ADDI = 0x10,
   SUBI = 0x11,
   MULI = 0x12,
@@ -109,11 +118,15 @@ export enum Op {
   MINF = 0x3b,
   MAXF = 0x3c,
   SEL = 0x3d, // g, in0, in1 -> g ? in1 : in0
+  ROL = 0x3e, // u8 bits: value, n -> rotated (value zero-extended)
+  ROR = 0x3f, // u8 bits
   I2F = 0x40,
   U2F = 0x41,
   F2I = 0x42, // truncate toward zero
   F2IR = 0x43, // round half away from zero
   MATH = 0x44, // u8 function (see MathFn)
+  STR = 0x45, // u8 function (see StrFn), operands are string addresses
+  SAR = 0x46, // arithmetic shift right (SHR of signed values)
   JMP = 0x50, // i32 relative to next instruction
   JZ = 0x51,
   JNZ = 0x52,
@@ -138,6 +151,37 @@ export enum MathFn {
   ATAN = 10,
   POW = 11,
   ABS = 12,
+  FLOOR = 13,
+  ATAN2 = 14,
+}
+
+/**
+ * String functions executed by the VM (STR opcode). A string operand is the
+ * address of its first character; the u16 capacity is 4 bytes before it and
+ * the text ends at the first NUL (CODESYS layout).
+ */
+export enum StrFn {
+  ASSIGN = 1, // dst, src
+  CONCAT = 2, // dst, a, b
+  LEN = 3, // a -> n
+  LEFT = 4, // dst, a, n
+  RIGHT = 5, // dst, a, n
+  MID = 6, // dst, a, l, p
+  INSERT = 7, // dst, a, b, p
+  DELETE = 8, // dst, a, l, p
+  REPLACE = 9, // dst, a, b, l, p
+  FIND = 10, // a, b -> position (1-based, 0 if absent)
+  CMP = 11, // a, b -> -1, 0, 1
+  FROM_INT = 12, // dst, i64
+  FROM_UINT = 13, // dst, u64
+  FROM_REAL = 14, // dst, f64 (REAL formatting)
+  FROM_LREAL = 15, // dst, f64 (LREAL formatting)
+  TO_INT = 16, // a -> i64
+  TO_REAL = 17, // a -> f64
+  FROM_BOOL = 18, // dst, b
+  FROM_TIME = 19, // dst, ns
+  CHR = 20, // dst, code -> one-character string
+  CODE = 21, // a, position -> character code (0 if out of range)
 }
 
 export enum PouKind {

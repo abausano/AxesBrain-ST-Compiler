@@ -25,7 +25,8 @@ mkdirSync(join(dir, "atteso"), { recursive: true });
 let falliti = 0;
 for (const c of casi) {
   const stc = join(dir, "out", `${c.nome}.stc`);
-  execFileSync(process.execPath, [cli, ...c.sorgenti.map((s) => join(dir, s)), "-o", stc], { stdio: "inherit" });
+  const opz = (c.compilatore ?? []).map((a) => (/\.(stlib|st)$/.test(a) ? join(dir, a) : a));
+  execFileSync(process.execPath, [cli, ...c.sorgenti.map((s) => join(dir, s)), ...opz, "-o", stc], { stdio: "pipe" });
   const r = spawnSync(stvm, [stc, ...c.argomenti], { encoding: "utf8" });
   const out = (r.stdout ?? "") + (r.stderr ?? "");
   const file = join(dir, "atteso", `${c.nome}.txt`);

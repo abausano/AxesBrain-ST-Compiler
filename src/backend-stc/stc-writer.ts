@@ -7,17 +7,18 @@
 /**
  * Serializes an StcModule to the binary .stc container (docs/AXESBRAIN_STC.md §3).
  *
- * Section payloads (prototype 0.1, little-endian):
+ * Section payloads (format 0.2, little-endian):
  *   DATA: u32 size, bytes
  *   POUS: u32 n; per POU: u8 kind, u32 codeOff, u32 codeLen, u32 frameSize,
  *         u32 instSize, u8 nParams, {u8 kind, u32 off}*, u8 retKind, u32 retOff,
- *         str name
+ *         str name   (retKind 11 = the result is returned by address)
  *   CODE: bytes
  *   TASK: u32 n; per task: str name, i64 intervalNs, i32 priority, u16 n,
  *         {u16 pou, u32 instOff}*
  *   IOMP: u32 n; per entry: u8 area, u8 size, u16 byte, u8 bit, u8 kind, u32 gOff
  *   NATV: u32 n; per native: str name, u8 n, u8 kind*, u8 retKind
- *   DBUG: u32 nSym; {str name, u8 kind, u32 gOff, u32 count}*;
+ *   FRMI: u32 n; per POU with a frame: u16 pou, u32 len, bytes (initial frame)
+ *   DBUG: u32 nSym; {str name, u8 kind, u32 gOff, u32 count}*;   (kind 11 = STRING)
  *         u32 nLines; {u16 pou, u32 pc, u32 line, u16 col}*
  * str = u16 length + UTF-8 bytes.
  */
@@ -98,6 +99,18 @@ export function writeStc(
   }
   sections.push(["POUS", pous]);
   sections.push(["CODE", code]);
+
+  const frmi = new Buf();
+  const withFrame = m.pous
+    .map((p, i) => ({ p, i }))
+    .filter((x) => x.p.frameSize > 0);
+  frmi.u32(withFrame.length);
+  for (const { p, i } of withFrame) {
+    frmi.u16(i);
+    frmi.u32(p.frameInit.length);
+    frmi.bytes(p.frameInit);
+  }
+  sections.push(["FRMI", frmi]);
 
   const task = new Buf();
   task.u32(m.tasks.length);
