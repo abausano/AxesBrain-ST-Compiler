@@ -1,0 +1,18 @@
+POU:
+  0 FILTRO kind=3 code=30 frame=0 inst=0
+TASK:
+  __DEFAULT interval=10000000ns priority=0 programs=1
+IO:
+  %IX0.1 -> G+1
+  %QX0.4 -> G+4
+  %MX1.1 -> G+7
+SIMBOLI:
+  INP1 = 0
+  INP2 = 0
+  INP3 = 0
+  OUT1 = 0
+  OUT5 = 0
+  OUT6 = 0
+  M1_1 = 0
+  M1_10 = 0
+  ANA1 = 0

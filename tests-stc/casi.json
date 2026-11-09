@@ -173,5 +173,17 @@
       "--esatto",
       "--print-all"
     ]
+  },
+  {
+    "nome": "io_filtro",
+    "sorgenti": [
+      "io_filtro.st",
+      "io_macchina.st"
+    ],
+    "argomenti": [
+      "--list",
+      "--ms",
+      "0"
+    ]
   }
 ]

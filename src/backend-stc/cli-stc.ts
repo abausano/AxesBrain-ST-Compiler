@@ -5,10 +5,11 @@
  * strucpp-ab: compile ST sources to an AxesBrain .stc file (prototype).
  *
  *   node dist/backend-stc/cli-stc.js a.st [b.st ...] -o out.stc [--json diag.json]
- *        [--lib libreria.stlib]... [-D NOME=valore]... [--tutto]
+ *        [--lib libreria.stlib]... [-D NOME=valore]... [--tutto] [--tutti-io]
  *
  * --lib adds the ST sources and constants of a .stlib archive (e.g. OSCAT);
  * --tutto generates code for every POU, not only the ones the programs use.
+ * --tutti-io keeps every located global in IOMP (default: only the ones the code uses).
  *
  * Exit code 0 on success, 1 on compile errors. Errors are printed as
  * file:line:col: error: message (and written to --json when given).
@@ -36,12 +37,14 @@ function main(argv: string[]): number {
   let out = "";
   let json = "";
   let all = false;
+  let allIo = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === "-o") out = argv[++i] ?? "";
     else if (a === "--json") json = argv[++i] ?? "";
     else if (a === "--lib") libs.push(argv[++i] ?? "");
     else if (a === "--tutto") all = true;
+    else if (a === "--tutti-io") allIo = true;
     else if (a === "-D") {
       const [k, v] = (argv[++i] ?? "").split("=");
       if (k) constants[k.toUpperCase()] = Number(v ?? 1);
@@ -109,6 +112,7 @@ function main(argv: string[]): number {
       const gen = new StcGenerator({
         globalConstants: constants,
         onlyReachable: !all,
+        allLocated: allIo,
       });
       const mod = gen.generate(r.ast!);
       for (const e of gen.errors)
