@@ -12,6 +12,32 @@ FUNCTION AB_TIME : TIME
   {external native AB_TIME}
 END_FUNCTION
 
+(* Globali G di AxesBrainSRV (G1..G32767, LREAL), condivise con i .pp.
+   Lettura e scrittura avvengono al momento della chiamata, non a inizio o fine scansione.
+   Fuori dall'intervallo: AB_GETG restituisce 0, le altre FALSE / 0. *)
+FUNCTION AB_GETG : LREAL
+  VAR_INPUT N : DINT; END_VAR
+  {external native AB_GETG}
+END_FUNCTION
+
+FUNCTION AB_SETG : BOOL
+  VAR_INPUT N : DINT; V : LREAL; END_VAR
+  {external native AB_SETG}
+END_FUNCTION
+
+(* Copia N globali a partire da G[DA] in un array di LREAL (P := ADR(array)).
+   Restituisce il numero di valori copiati (0 se l'intervallo non e' valido). *)
+FUNCTION AB_GETG_N : INT
+  VAR_INPUT DA : DINT; N : INT; P : POINTER TO LREAL; END_VAR
+  {external native AB_GETG_N}
+END_FUNCTION
+
+(* Copia N valori di un array di LREAL (P := ADR(array)) nelle globali a partire da G[DA]. *)
+FUNCTION AB_SETG_N : INT
+  VAR_INPUT DA : DINT; N : INT; P : POINTER TO LREAL; END_VAR
+  {external native AB_SETG_N}
+END_FUNCTION
+
 (* Fronte di salita *)
 FUNCTION_BLOCK R_TRIG
   VAR_INPUT CLK : BOOL; END_VAR

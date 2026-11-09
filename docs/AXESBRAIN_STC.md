@@ -348,6 +348,14 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
 `R_TRIG`, `F_TRIG`, `SR`, `RS`. I timer usano `AB_TIME()`. Poi i FB `MC_*` che lanciano i `.pp`, e i servizi
 (`AB_Display`, `AB_SetEvento`, `AB_GetG`/`AB_SetG`).
 
+### 11.1 Native di AxesBrainSRV (09/11/2026)
+
+- Globali G (`ablib.st`): `AB_GETG`, `AB_SETG`, `AB_GETG_N`, `AB_SETG_N` (le varianti `_N` ricevono `ADR(array di
+  LREAL)`; la VM espone `NativePointer()`). Lettura e scrittura al momento della chiamata.
+- Lancio di `.pp` (`ablib_pp.st`): `AB_PP_NUOVO`, `AB_PP_SETL`, `AB_PP_AVVIA`, `AB_PP_STATO`, `AB_PP_GETL`,
+  `AB_PP_RILASCIA`, usate da `AB_RunPP` e dai blocchi `MC_*`. La STRING del nome arriva come indirizzo e la nativa la
+  legge con `NativeString()`.
+
 ## 12. Decisioni aperte
 
 1. Periodo del task predefinito quando manca la CONFIGURATION: **10 ms** (confermato da Andrea, 09/11/2026).
