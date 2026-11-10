@@ -25,6 +25,7 @@ import type {
   FunctionBlockDeclaration,
   FunctionCallExpression,
   FunctionDeclaration,
+  InterfaceDeclaration,
   MethodDeclaration,
   ProgramDeclaration,
   Statement,
@@ -64,6 +65,8 @@ export interface ScalarT {
   to?: VT;
   /** REFERENCE_TO: dereferenced implicitly on access. */
   implicit?: boolean;
+  /** INTERFACE variable: address of the FB instance that implements it (10/11/2026). */
+  itf?: string;
 }
 export interface StringT {
   t: "string";
@@ -260,6 +263,8 @@ interface MethodTarget {
   fb: PouInfo;
   m: PouInfo;
   virtual: boolean;
+  /** INTERFACE call: type -> implementation already chosen. */
+  impls?: Array<[number, number]>;
 }
 
 /** A place in memory. Base P: its address is on the operand stack. */
@@ -490,6 +495,13 @@ export interface StcSymbol {
   gOff: number;
   /** Element count for arrays (1 for scalars). */
   count: number;
+  /** BOOL (shown as TRUE/FALSE by the debug; SYMT section). */
+  bool?: boolean;
+}
+/** Variables in the frame of a POU (METHOD, FUNCTION, VAR_TEMP): debug while paused (LOCS section). */
+export interface StcLocals {
+  pou: number;
+  vars: StcSymbol[];
 }
 export interface StcLine {
   pou: number;
@@ -505,6 +517,7 @@ export interface StcModule {
   natives: StcNative[];
   symbols: StcSymbol[];
   lines: StcLine[];
+  locals: StcLocals[];
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +558,8 @@ export class StcGenerator {
   private strConsts = new Map<string, number>();
   private lines: StcLine[] = [];
   private symbols: StcSymbol[] = [];
+  private locals: StcLocals[] = [];
+  private itfDecls = new Map<string, InterfaceDeclaration>();
   private io: StcIo[] = [];
   /** Globals referenced by the generated code: only their AT addresses go into IOMP. */
   private usedGlobals = new Set<string>();
@@ -578,6 +593,7 @@ export class StcGenerator {
     for (const f of ast.functionBlocks)
       if (f.extends) this.extended.add(f.extends);
     for (const f of ast.functionBlocks) this.declareMembers(f);
+    for (const i of ast.interfaces ?? []) this.itfDecls.set(i.name, i);
 
     // Global segment: VAR_GLOBAL blocks, then program instances.
     const globalBlocks: VarBlock[] = [
@@ -737,10 +753,8 @@ export class StcGenerator {
         name: p.name,
         code: p.code,
         frameSize: p.laidOut ? align(p.frame.size, 8) : 0,
-        instSize:
-          p.laidOut && p.kind !== PouKind.FUNCTION && p.kind !== PouKind.METHOD
-            ? p.inst.size
-            : 0,
+        // METHOD: size of the instance of its FB (the debug finds there the variables of the instance)
+        instSize: p.laidOut && p.kind !== PouKind.FUNCTION ? p.inst.size : 0,
         params: p.params.map((s) => ({
           kind: s.kind,
           off: s.byAddress ? (s.ptr?.off ?? s.slot.off) : s.slot.off,
@@ -755,6 +769,7 @@ export class StcGenerator {
       natives: this.natives,
       symbols: this.symbols,
       lines: this.lines,
+      locals: this.locals,
     };
   }
 
@@ -878,6 +893,8 @@ export class StcGenerator {
     const cached = this.typeCache.get(name);
     if (cached) return cached;
     if (this.fbDecls.has(name)) return { t: "fb", name };
+    if (this.itfDecls.has(name))
+      return { t: "scalar", name, kind: Kind.I64, itf: name };
     const td = this.typeDecls.get(name);
     if (!td) this.fail(`Tipo ${name} non trovato`, node);
     const def = td.definition;
@@ -1151,6 +1168,7 @@ export class StcGenerator {
   private isOop(f: FunctionBlockDeclaration): boolean {
     return (
       !!f.extends ||
+      (f.implements?.length ?? 0) > 0 ||
       (f.methods?.length ?? 0) > 0 ||
       (f.properties?.length ?? 0) > 0 ||
       this.extended.has(f.name)
@@ -1616,7 +1634,13 @@ export class StcGenerator {
   private symbolsFor(name: string, t: VT, abs: number) {
     switch (t.t) {
       case "scalar":
-        this.symbols.push({ name, kind: t.kind, gOff: abs, count: 1 });
+        this.symbols.push({
+          name,
+          kind: t.kind,
+          gOff: abs,
+          count: 1,
+          ...(isBool(t) ? { bool: true } : {}),
+        });
         return;
       case "string":
         this.symbols.push({ name, kind: SYM_STRING, gOff: abs, count: 1 });
@@ -1624,7 +1648,13 @@ export class StcGenerator {
       case "array": {
         const n = this.count(t);
         if (t.elem.t === "scalar") {
-          this.symbols.push({ name, kind: t.elem.kind, gOff: abs, count: n });
+          this.symbols.push({
+            name,
+            kind: t.elem.kind,
+            gOff: abs,
+            count: n,
+            ...(isBool(t.elem) ? { bool: true } : {}),
+          });
           return;
         }
         if (t.elem.t === "string") {
@@ -1713,6 +1743,11 @@ export class StcGenerator {
     this.genStatements(p.decl.body);
     const end = this.code.pc;
     for (const j of this.returnJumps) this.code.patch(j, end);
+    // debug (11/11/2026): a stop on END_METHOD / END_FUNCTION / END_FUNCTION_BLOCK / END_PROGRAM, after the last
+    // statement, where the result and the outputs are already set (also after RETURN). Not for PROPERTY GET/SET.
+    const endLine = p.decl.sourceSpan?.endLine ?? 0;
+    if (endLine && !p.member?.startsWith("__"))
+      this.lines.push({ pou: p.index, pc: end, line: endLine, col: 1 });
     // FUNCTION epilogue: copy VAR_OUTPUT to the caller's variables.
     for (const prm of p.params) {
       if (prm.section !== "VAR_OUTPUT" || !prm.ptr) continue;
@@ -1738,6 +1773,35 @@ export class StcGenerator {
       this.writeInit(img, v.off, v.type, v.init);
     }
     p.frameInit = img;
+    // debug: variables of the frame (seen while the POU is paused)
+    const vars: StcSymbol[] = [];
+    for (const v of p.frame.order) {
+      if (v.indirect || v.section === "HIDDEN" || v.name.startsWith("__"))
+        continue;
+      const t = v.type;
+      if (t.t === "scalar")
+        vars.push({
+          name: v.name,
+          kind: t.kind,
+          gOff: v.off,
+          count: 1,
+          ...(isBool(t) ? { bool: true } : {}),
+        });
+      else if (t.t === "string")
+        vars.push({ name: v.name, kind: SYM_STRING, gOff: v.off, count: 1 });
+      else if (
+        t.t === "array" &&
+        (t.elem.t === "scalar" || t.elem.t === "string")
+      )
+        vars.push({
+          name: v.name,
+          kind: t.elem.t === "scalar" ? t.elem.kind : SYM_STRING,
+          gOff: v.off,
+          count: this.count(t),
+          ...(t.elem.t === "scalar" && isBool(t.elem) ? { bool: true } : {}),
+        });
+    }
+    if (vars.length) this.locals.push({ pou: p.index, vars });
   }
 
   private genStatements(list: Statement[]) {
@@ -2006,6 +2070,8 @@ export class StcGenerator {
         virtual = false;
       } else {
         const v = this.findVar(head);
+        if (v && isScalar(v.slot.type) && v.slot.type.itf)
+          return this.interfaceTarget(v, v.slot.type.itf, mname, e);
         if (!v || v.slot.type.t !== "fb") return undefined;
         fb = this.pouByName.get(v.slot.type.name);
         const vv = v;
@@ -2027,6 +2093,82 @@ export class StcGenerator {
     return { pushThis, fb, m, virtual };
   }
 
+  /** The FB (or one of its bases) implements the INTERFACE, also through interfaces that extend it. */
+  private implementsItf(fb: PouInfo, itf: string): boolean {
+    const ext = (name: string, seen: Set<string>): boolean => {
+      if (name === itf) return true;
+      if (seen.has(name)) return false;
+      seen.add(name);
+      return !!this.itfDecls.get(name)?.extends?.some((b) => ext(b, seen));
+    };
+    for (let c: PouInfo | undefined = fb; c; c = c.base) {
+      const d = c.decl as FunctionBlockDeclaration;
+      if (d.implements?.some((i) => ext(i, new Set()))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * "I.M()" with I an INTERFACE variable: the address of the instance is in I; CALLV with every reachable FB that
+   * implements the interface (a null I traps on the type read).
+   */
+  private interfaceTarget(
+    v: { slot: VarSlot; base: Base },
+    itf: string,
+    mname: string,
+    node: unknown,
+  ): MethodTarget {
+    const impls: Array<[number, number]> = [];
+    let first: { fb: PouInfo; m: PouInfo } | undefined;
+    for (const c of this.pous) {
+      if (c.kind !== PouKind.FUNCTION_BLOCK || c.isAbstract) continue;
+      if (!this.reachable.has(c) || !this.implementsItf(c, itf)) continue;
+      this.layoutPou(c);
+      const impl = this.methodOf(c, mname);
+      if (!impl || impl.isAbstract) continue;
+      this.layoutPou(impl);
+      impls.push([c.index, impl.index]);
+      first ??= { fb: c, m: impl };
+    }
+    if (!first)
+      this.fail(
+        `${itf}.${mname}: nessun FUNCTION_BLOCK del programma lo implementa`,
+        node,
+      );
+    return {
+      pushThis: () => {
+        let p: Place = { base: v.base, off: v.slot.off, type: v.slot.type };
+        if (v.slot.indirect) p = this.derefSlot(p);
+        this.load(T_LINT, p.base, p.off);
+      },
+      fb: first.fb,
+      m: first.m,
+      virtual: true,
+      impls,
+    };
+  }
+
+  /** PROPERTY of type STRING/STRUCT/ARRAY read through GET: leaves the address of the result on the stack. */
+  private genAggProperty(e: VariableExpression, wantString: boolean): boolean {
+    const pt = this.propertyTarget(e);
+    if (!pt) return false;
+    const g = this.methodOf(pt.fb, `__GET_${pt.name}`);
+    if (!g) this.fail(`Proprietà ${pt.name} senza GET`, e);
+    this.layoutPou(g);
+    if (
+      !g.ret ||
+      isScalar(g.ret.type) ||
+      (wantString && g.ret.type.t !== "string")
+    )
+      this.fail(`Proprietà ${pt.name}: tipo non adatto qui`, e);
+    this.genMethodInvoke(
+      { pushThis: pt.pushThis, fb: pt.fb, m: g, virtual: true },
+      () => {},
+      e,
+    );
+    return true;
+  }
+
   /**
    * Call a method: instance address, arguments, then CALLM (one implementation for the static type and all its
    * reachable descendants) or CALLV with the table type -> implementation.
@@ -2039,9 +2181,9 @@ export class StcGenerator {
     this.layoutPou(t.m);
     t.pushThis();
     pushArgs();
-    const pairs: Array<[number, number]> = [];
-    let diverse = false;
-    if (t.virtual) {
+    const pairs: Array<[number, number]> = t.impls ? [...t.impls] : [];
+    let diverse = !!t.impls;
+    if (t.virtual && !t.impls) {
       for (const c of this.pous) {
         if (c.kind !== PouKind.FUNCTION_BLOCK || !this.descends(c, t.fb))
           continue;
@@ -2147,12 +2289,14 @@ export class StcGenerator {
     if (!s) this.fail(`Proprietà ${pt.name} senza SET`, target);
     this.layoutPou(s);
     const prm = s.params[0]!;
-    if (!isScalar(prm.slot.type))
-      this.fail(`Proprietà ${pt.name}: solo tipi elementari per ora`, target);
     const vt = prm.slot.type;
     this.genMethodInvoke(
       { pushThis: pt.pushThis, fb: pt.fb, m: s, virtual: true },
-      () => this.genExpr(value, vt),
+      () => {
+        if (isScalar(vt)) this.genExpr(value, vt);
+        else if (vt.t === "string") this.genStrSrc(value);
+        else this.genAggSrc(value, vt);
+      },
       target,
     );
     return true;
@@ -2406,7 +2550,11 @@ export class StcGenerator {
     if (e.kind === "ParenthesizedExpression")
       return this.isLvalue(e.expression);
     if (e.kind === "DrefExpression") return true;
-    return e.kind === "VariableExpression" && !!this.findVar(e.name);
+    return (
+      e.kind === "VariableExpression" &&
+      !!this.findVar(e.name) &&
+      !this.propertyTarget(e)
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -2440,7 +2588,20 @@ export class StcGenerator {
   private genStrInto(e: Expression, dst: StringT): void {
     if (e.kind === "ParenthesizedExpression")
       return this.genStrInto(e.expression, dst);
+    if (e.kind === "VariableExpression" && this.genAggProperty(e, true)) {
+      this.str(StrFn.ASSIGN);
+      return;
+    }
     if (e.kind === "FunctionCallExpression") {
+      const mt = this.methodTarget(e);
+      if (mt) {
+        this.layoutPou(mt.m);
+        if (!mt.m.ret || mt.m.ret.type.t !== "string")
+          this.fail(`${e.functionName} non restituisce una STRING`, e);
+        this.genMethodInvoke(mt, () => this.pushArgs(e, mt.m), e);
+        this.str(StrFn.ASSIGN);
+        return;
+      }
       if (this.genStrCall(e)) return;
       const pou = this.pouByName.get(e.functionName);
       if (pou && pou.kind === PouKind.FUNCTION) {
@@ -2475,6 +2636,29 @@ export class StcGenerator {
     if (this.isLvalue(e)) {
       this.genAddressOf(e);
       return;
+    }
+    if (e.kind === "VariableExpression" && this.propertyTarget(e)) {
+      const t = this.varType(e)!;
+      const tmp = this.tempSlot(t);
+      this.addr(Base.F, tmp.off);
+      this.genAggProperty(e, false);
+      this.copyOp(t);
+      this.addr(Base.F, tmp.off);
+      return;
+    }
+    if (e.kind === "FunctionCallExpression") {
+      const mt = this.methodTarget(e);
+      if (mt) {
+        this.layoutPou(mt.m);
+        if (!mt.m.ret || isScalar(mt.m.ret.type))
+          this.fail(`${e.functionName} non restituisce STRUCT/ARRAY`, e);
+        const tmp = this.tempSlot(mt.m.ret.type);
+        this.addr(Base.F, tmp.off);
+        this.genMethodInvoke(mt, () => this.pushArgs(e, mt.m), e);
+        this.copyOp(mt.m.ret.type);
+        this.addr(Base.F, tmp.off);
+        return;
+      }
     }
     if (e.kind === "FunctionCallExpression") {
       const pou = this.pouByName.get(e.functionName);
@@ -2785,6 +2969,16 @@ export class StcGenerator {
    * to `want` when given. Returns the type of the value left on the stack.
    */
   private genExpr(e: Expression, want?: ScalarT): ScalarT {
+    if (want?.itf) {
+      const vt = this.typeOf(e);
+      if (vt && vt.t === "fb") {
+        const fb = this.pouByName.get(vt.name);
+        if (!fb || !this.implementsItf(fb, want.itf))
+          this.fail(`${vt.name} non implementa ${want.itf}`, e);
+        this.genAddressOf(e);
+        return want;
+      }
+    }
     const t = this.genExprRaw(e, want);
     if (want && t.kind !== want.kind) {
       this.convert(t, want);
@@ -3123,11 +3317,15 @@ export class StcGenerator {
     const mt = this.methodTarget(e);
     if (mt) {
       this.layoutPou(mt.m);
-      if (mt.m.ret && !isScalar(mt.m.ret.type))
-        this.fail(
-          `${mt.m.name}: metodi che restituiscono STRING, STRUCT o ARRAY non ancora supportati`,
-          e,
-        );
+      if (mt.m.ret && !isScalar(mt.m.ret.type)) {
+        // risultato STRING/STRUCT/ARRAY non usato: in un temporaneo
+        const tmp = this.tempSlot(mt.m.ret.type);
+        this.addr(Base.F, tmp.off);
+        this.genMethodInvoke(mt, () => this.pushArgs(e, mt.m), e);
+        if (mt.m.ret.type.t === "string") this.str(StrFn.ASSIGN);
+        else this.copyOp(mt.m.ret.type);
+        return "none";
+      }
       this.genMethodInvoke(mt, () => this.pushArgs(e, mt.m), e);
       return mt.m.ret ? "value" : "none";
     }

@@ -1057,6 +1057,16 @@ export class TypeChecker {
       }
     }
 
+    // FB instance assigned to an INTERFACE it implements (CODESYS): the variable refers to the instance
+    // (back-end .stc, 10/11/2026, Modifica fatta da Claude)
+    if (
+      this.implementsInterface(
+        typeNameUtil(valueType),
+        typeNameUtil(targetType),
+      )
+    )
+      return;
+
     // Check assignment compatibility
     if (!_isAssignable(targetType, valueType)) {
       // Check if it's a function name assignment (return value)
@@ -1333,6 +1343,42 @@ export class TypeChecker {
   /**
    * Check if a type name refers to a known function block or struct type.
    */
+  /**
+   * True when `fbName` (an FB, or an INTERFACE) implements the INTERFACE `itfName`, directly, through a base FB
+   * (EXTENDS) or through an interface that extends it.
+   */
+  private implementsInterface(fbName: string, itfName: string): boolean {
+    if (!this.ast) return false;
+    const itf = itfName.toUpperCase();
+    const itfs = this.ast.interfaces ?? [];
+    if (!itfs.some((i) => i.name.toUpperCase() === itf)) return false;
+    const extendsItf = (name: string, seen: Set<string>): boolean => {
+      const u = name.toUpperCase();
+      if (u === itf) return true;
+      if (seen.has(u)) return false;
+      seen.add(u);
+      const d = itfs.find((i) => i.name.toUpperCase() === u);
+      return !!d?.extends?.some((b) => extendsItf(b, seen));
+    };
+    if (itfs.some((i) => i.name.toUpperCase() === fbName.toUpperCase()))
+      return extendsItf(fbName, new Set());
+    const seen = new Set<string>();
+    const fbs = this.ast.functionBlocks;
+    let name: string | undefined = fbName;
+    while (name !== undefined && !seen.has(name.toUpperCase())) {
+      const upper = name.toUpperCase();
+      seen.add(upper);
+      const fb: FunctionBlockDeclaration | undefined = fbs.find(
+        (f) => f.name.toUpperCase() === upper,
+      );
+      if (!fb) return false;
+      if (fb.implements?.some((i) => extendsItf(i, new Set())) === true)
+        return true;
+      name = fb.extends;
+    }
+    return false;
+  }
+
   private isKnownCompositeType(name: string): boolean {
     if (!this.ast) return false;
     const upper = name.toUpperCase();

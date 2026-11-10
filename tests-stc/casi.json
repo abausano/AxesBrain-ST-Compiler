@@ -246,5 +246,29 @@
       "--print",
       "PROVA3.RA,PROVA3.RB"
     ]
+  },
+  {
+    "nome": "oop4",
+    "sorgenti": [
+      "oop4.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "30",
+      "--print",
+      "PROVA4.R1,PROVA4.N1,PROVA4.R2,PROVA4.N2,PROVA4.R3,PROVA4.R4,PROVA4.P.X,PROVA4.P.Y,PROVA4.T"
+    ]
+  },
+  {
+    "nome": "oop5",
+    "sorgenti": [
+      "oop5.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "10",
+      "--print",
+      "PROVA5.R"
+    ]
   }
 ]

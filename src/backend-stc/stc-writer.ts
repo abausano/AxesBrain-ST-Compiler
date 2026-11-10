@@ -168,6 +168,33 @@ export function writeStc(
   }
   sections.push(["DBUG", dbg]);
 
+  // SYMT (10/11/2026): indices of the DBUG symbols that are BOOL (the VM keeps them U8; the debug shows TRUE/FALSE)
+  const symt = new Buf();
+  const bools = m.symbols
+    .map((s, i) => (s.bool ? i : -1))
+    .filter((i) => i >= 0);
+  symt.u32(bools.length);
+  for (const i of bools) symt.u32(i);
+  sections.push(["SYMT", symt]);
+
+  // LOCS (10/11/2026): variables in the frame of each POU (METHOD, FUNCTION), offsets in the frame; u8 flags bit 0 = BOOL
+  if (m.locals.length) {
+    const locs = new Buf();
+    locs.u32(m.locals.length);
+    for (const l of m.locals) {
+      locs.u16(l.pou);
+      locs.u32(l.vars.length);
+      for (const v of l.vars) {
+        locs.str(v.name);
+        locs.u8(v.kind);
+        locs.u32(v.gOff);
+        locs.u32(v.count);
+        locs.u8(v.bool ? 1 : 0);
+      }
+    }
+    sections.push(["LOCS", locs]);
+  }
+
   if (sources.length) {
     const srcs = new Buf();
     srcs.u32(sources.length);

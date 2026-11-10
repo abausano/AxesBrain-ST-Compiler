@@ -175,7 +175,7 @@ calcolata (`cnt[i](...)`, array di FB).
 - **METHOD**: ogni metodo di un FB è una POU di tipo 4 (METHOD) di nome `FB.METODO`. Ha frame, parametri e
   risultato come una FUNCTION, e l'istanza del suo FB (base `I`). Il chiamante mette in pila l'indirizzo
   dell'istanza, poi gli argomenti come per una FUNCTION, poi `CALLM pou` oppure `CALLV`. I metodi stanno nel FB
-  prima del corpo (grammatica di STruC++). Nelle POUS la dimensione dell'istanza di un METHOD è 0.
+  prima del corpo (grammatica di STruC++). Nelle POUS la dimensione dell'istanza di un METHOD è quella del suo FB (serve al debug).
 - **PROPERTY**: due metodi, `FB.__GET_P` (risultato `P`) e `FB.__SET_P` (un `VAR_INPUT P`): si ridefiniscono
   come i metodi. Lettura `x.P`, `THIS.P` o `P` dentro il FB → GET; assegnamento → SET. Solo tipi elementari.
 - **EXTENDS**: l'istanza del figlio ha prima tutte le variabili del padre, agli stessi offset, poi le sue (i metodi
@@ -188,9 +188,25 @@ calcolata (`cnt[i](...)`, array di FB).
   tutti i tipi possibili; la VM legge `__TYPE` dall'istanza (sotto gli `nargs` argomenti) e sceglie. Altrimenti
   `CALLM`. Vale per `x.M()`, `THIS.M()`, `M()` dentro il FB e per le proprietà; così un metodo del padre che chiama
   un metodo ridefinito usa quello del figlio, anche con l'istanza passata come `VAR_IN_OUT` del tipo padre.
-- **Non ancora**: `INTERFACE`/`IMPLEMENTS`, `__NEW`/`__DELETE`, metodi e proprietà di tipo STRING/STRUCT/ARRAY,
-  metodo su un'istanza calcolata (`A[i].M()`), `VAR_INST`. Le variabili dei metodi stanno nel frame: nel debug
-  non si vedono, come quelle delle FUNCTION.
+- **INTERFACE** (11/11/2026): una variabile di tipo interfaccia è un `LINT` con l'indirizzo dell'istanza; un FB (o un
+  elemento di array di FB) dove si aspetta un'interfaccia mette il suo indirizzo, se la implementa. `I.M()` carica
+  l'indirizzo e usa sempre `CALLV` con le coppie di tutti i FB raggiungibili che implementano l'interfaccia (anche
+  tramite `EXTENDS` o interfacce che la estendono); i FB con `IMPLEMENTS` hanno `__TYPE`. Interfaccia nulla →
+  trappola 4 alla lettura del tipo.
+- **Risultati STRING/STRUCT/ARRAY** di METHOD e PROPERTY: come le FUNCTION (§6.2).
+- **Non ancora**: `__NEW`/`__DELETE`, metodo su un'istanza calcolata (`A[i].M()`, la grammatica non lo accetta),
+  `VAR_INST`, PROPERTY nelle interfacce.
+
+### 6.4 Sezioni facoltative per il debug (11/11/2026)
+
+- `SYMT`: `u32 n; u32 indice·n`, i simboli della `DBUG` che sono BOOL (la VM li tiene come U8; il debug mostra
+  TRUE/FALSE).
+- `LOCS`: `u32 n; {u16 pou, u32 m, {str nome, u8 kind, u32 offset nel frame, u32 elementi, u8 flag}·m}·n`, le variabili
+  del frame di ogni POU (parametri, locali, risultato elementare; flag bit 0 = BOOL): si leggono quando la POU è nella
+  pila delle chiamate di un programma in pausa.
+- Mappa righe: oltre all'inizio di ogni istruzione, una voce sull'`END_...` della POU (prima dell'epilogo), dove si
+  ferma il passo passo dopo l'ultima istruzione o un `RETURN`.
+- Una VM che non le conosce le ignora.
 
 ## 7. Bytecode
 
