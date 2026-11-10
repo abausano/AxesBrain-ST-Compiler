@@ -20,6 +20,8 @@
  *   FRMI: u32 n; per POU with a frame: u16 pou, u32 len, bytes (initial frame)
  *   DBUG: u32 nSym; {str name, u8 kind, u32 gOff, u32 count}*;   (kind 11 = STRING)
  *         u32 nLines; {u16 pou, u32 pc, u32 line, u16 col}*
+ *   SRCS (optional): u32 n; {str path, u8[16] md5}*   additional source files
+ *         (libraries, I/O file) with their MD5: SRV marks the .stc stale if one changed.
  * str = u16 length + UTF-8 bytes.
  */
 
@@ -69,6 +71,7 @@ export function writeStc(
   m: StcModule,
   md5: Uint8Array,
   compilerVersion = 1,
+  sources: Array<{ path: string; md5: Uint8Array }> = [],
 ): Uint8Array {
   const sections: Array<[string, Buf]> = [];
 
@@ -164,6 +167,16 @@ export function writeStc(
     dbg.u16(l.col);
   }
   sections.push(["DBUG", dbg]);
+
+  if (sources.length) {
+    const srcs = new Buf();
+    srcs.u32(sources.length);
+    for (const f of sources) {
+      srcs.str(f.path);
+      srcs.bytes(f.md5);
+    }
+    sections.push(["SRCS", srcs]);
+  }
 
   // Header (64 bytes) + section table (12 bytes per section) + sections.
   const out = new Buf();

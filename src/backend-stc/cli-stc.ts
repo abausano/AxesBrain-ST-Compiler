@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { analyze } from "../index.js";
 import { StcError, StcGenerator } from "./stc-codegen.js";
 import { writeStc } from "./stc-writer.js";
@@ -74,6 +74,12 @@ function main(argv: string[]): number {
   // included): SRV compares it with the .st it launches to detect a stale .stc.
   const md5 = createHash("md5");
   md5.update(readFileSync(inputs[0]!));
+  // MD5 of the other sources (libraries, I/O file, --lib archives) with their absolute path:
+  // SRV checks them too, so a changed library also makes the .stc stale.
+  const others = [...inputs.slice(1), ...libs].map((f) => ({
+    path: resolve(f),
+    md5: new Uint8Array(createHash("md5").update(readFileSync(f)).digest()),
+  }));
 
   const diags: Diag[] = [];
   const r = analyze(sources[0]!.source, {
@@ -124,7 +130,11 @@ function main(argv: string[]): number {
           message: e.message,
         });
       if (gen.errors.length) ok = false;
-      else writeFileSync(out, writeStc(mod, new Uint8Array(md5.digest())));
+      else
+        writeFileSync(
+          out,
+          writeStc(mod, new Uint8Array(md5.digest()), 1, others),
+        );
     } catch (e) {
       ok = false;
       if (e instanceof StcError) {

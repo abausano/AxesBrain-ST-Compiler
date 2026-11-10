@@ -41,7 +41,7 @@ Binario, little-endian, allineamento a 8 byte delle sezioni.
 | magia | 4 byte | `ABST` |
 | versione formato | u16 maggiore, u16 minore | la VM rifiuta un maggiore diverso |
 | flag | u32 | bit 0: contiene debug |
-| md5 sorgente | 16 byte | MD5 del file sorgente principale (il primo `.st` sulla riga di comando), byte per byte come su disco; le librerie (`ablib.st`, `--lib`) non contano |
+| md5 sorgente | 16 byte | MD5 del file sorgente principale (il primo `.st` sulla riga di comando), byte per byte come su disco; le librerie (`ablib.st`, `--lib`) hanno il loro MD5 nella sezione `SRCS` |
 | versione compilatore | u32 | |
 | numero sezioni | u32 | |
 | riservato | resto | a zero |
@@ -62,6 +62,7 @@ Binario, little-endian, allineamento a 8 byte delle sezioni.
 | `NATV` | funzioni native richieste a SRV, per nome e firma (§7.6) |
 | `DBUG` | simboli e mappa codice → riga:colonna (§10), opzionale |
 | `RETN` | elenco delle variabili RETAIN, opzionale |
+| `SRCS` | altri sorgenti compilati (librerie, file I/O, archivi `--lib`): `u32 n; {str percorso assoluto, u8[16] md5}*`, opzionale (10/11/2026) |
 
 La VM ignora le sezioni che non conosce (compatibilità in avanti).
 
@@ -354,7 +355,7 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
   LREAL)`; la VM espone `NativePointer()`). Lettura e scrittura al momento della chiamata.
 - Lancio di `.pp` (`ablib_pp.st`): `AB_PP_NUOVO`, `AB_PP_SETL`, `AB_PP_AVVIA`, `AB_PP_STATO`, `AB_PP_GETL`,
   `AB_PP_RILASCIA`, usate da `AB_RunPP` e dai blocchi `MC_*`. La STRING del nome arriva come indirizzo e la nativa la
-  legge con `NativeString()`.
+  legge con `NativeString()`. Dal 10/11/2026 `AB_RunPP` ha 16 ingressi (L1…L16) e 8 uscite (R1…R8 = L21…L28).
 
 ## 12. Decisioni aperte
 
@@ -378,7 +379,8 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
    numero 6 in `ExecSubSystemProcess` / `KillSubSystemProcess` e negli altri metodi che usano il numero; avvio
    automatico con `NomePartProgramLancioST` sotto `[ParametriAUTOMAZIONE]`, dopo `Main.pp`. Si lanciano sia `.st`
    sia `.stc` dalla cartella `partprogST` (valore di registro `PathPartProgramST`): con `.st` la VM confronta l'MD5
-   del sorgente con quello nell'intestazione del `.stc` (§3) e segnala se va ricompilato. Il PLC lanciato da
+   del sorgente con quello nell'intestazione del `.stc` (§3), e dal 10/11/2026 anche quello dei file della sezione
+   `SRCS` che esistono ancora, e segnala se va ricompilato. Il PLC lanciato da
    `sistema.txt` non è resettabile; quello lanciato da COM sì, salvo un bit di `iMaskMode`. Lancio da un `.pp`: si
    decide più avanti.
 5. **Merker** (deciso il 09/11/2026): `%MX` sulle uscite virtuali `Mw.b`, regola lineare che parte da M1.1:

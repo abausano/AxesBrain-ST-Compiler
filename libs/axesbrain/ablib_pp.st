@@ -5,10 +5,11 @@
  * bloccare la scansione (funzioni native AB_PP_* di SRV), e primi blocchi di movimento
  * con nomi e firme in stile PLCopen/CODESYS che chiamano .pp scritti da AB&T.
  *
- * Convenzione delle L (proposta, 09/11/2026):
- *   - ingresso: L1..L8 = parametri del blocco (L1 = numero dell'asse per i blocchi di movimento);
+ * Convenzione delle L (proposta 09/11/2026, 16 ingressi e 8 uscite dal 10/11/2026, Andrea):
+ *   - ingresso: L1..L16 = parametri del blocco (L1 = numero dell'asse per i blocchi di movimento);
  *   - uscita:   L20 = codice d'errore restituito dal .pp (0 = tutto bene),
- *               L21..L28 = risultati.
+ *               L21..L28 = risultati (R1..R8 di AB_RunPP).
+ * Se il .pp ha meno di 32 locali (NumeroLocali di sistema.txt), SRV le porta a 32 prima del lancio.
  * I .pp sono cercati nella cartella dei part program di AxesBrainSRV (PathPartProgramGP).
  * Un reset del sistema interrompe i .pp lanciati da qui: il blocco va in errore (-6).
  *)
@@ -60,7 +61,7 @@ FUNCTION_BLOCK AB_RunPP
   VAR_INPUT
     Execute : BOOL;
     NomePP : STRING(64);
-    L1, L2, L3, L4, L5, L6, L7, L8 : LREAL;
+    L1, L2, L3, L4, L5, L6, L7, L8, L9, L10, L11, L12, L13, L14, L15, L16 : LREAL;
   END_VAR
   VAR_OUTPUT
     Done : BOOL;
@@ -75,6 +76,9 @@ FUNCTION_BLOCK AB_RunPP
     Visto : BOOL;
     Stato : INT;
     Ok : BOOL;
+    I : INT;
+    LIn : ARRAY[1..16] OF LREAL;
+    ROut : ARRAY[1..8] OF LREAL;
   END_VAR
 
   IF NOT Execute AND (Done OR Error) AND Visto THEN
@@ -92,14 +96,13 @@ FUNCTION_BLOCK AB_RunPP
       ErrorID := -1;
       H := 0;
     ELSE
-      Ok := AB_PP_SETL(H, 1, L1);
-      Ok := AB_PP_SETL(H, 2, L2);
-      Ok := AB_PP_SETL(H, 3, L3);
-      Ok := AB_PP_SETL(H, 4, L4);
-      Ok := AB_PP_SETL(H, 5, L5);
-      Ok := AB_PP_SETL(H, 6, L6);
-      Ok := AB_PP_SETL(H, 7, L7);
-      Ok := AB_PP_SETL(H, 8, L8);
+      LIn[1] := L1;   LIn[2] := L2;   LIn[3] := L3;   LIn[4] := L4;
+      LIn[5] := L5;   LIn[6] := L6;   LIn[7] := L7;   LIn[8] := L8;
+      LIn[9] := L9;   LIn[10] := L10; LIn[11] := L11; LIn[12] := L12;
+      LIn[13] := L13; LIn[14] := L14; LIn[15] := L15; LIn[16] := L16;
+      FOR I := 1 TO 16 DO
+        Ok := AB_PP_SETL(H, I, LIn[I]);
+      END_FOR
       Ok := AB_PP_AVVIA(H);
       Busy := TRUE;
     END_IF
@@ -111,14 +114,11 @@ FUNCTION_BLOCK AB_RunPP
     CASE Stato OF
       4:  (* finito *)
         ErrorID := LREAL_TO_DINT(AB_PP_GETL(H, 20));
-        R1 := AB_PP_GETL(H, 21);
-        R2 := AB_PP_GETL(H, 22);
-        R3 := AB_PP_GETL(H, 23);
-        R4 := AB_PP_GETL(H, 24);
-        R5 := AB_PP_GETL(H, 25);
-        R6 := AB_PP_GETL(H, 26);
-        R7 := AB_PP_GETL(H, 27);
-        R8 := AB_PP_GETL(H, 28);
+        FOR I := 1 TO 8 DO
+          ROut[I] := AB_PP_GETL(H, 20 + I);
+        END_FOR
+        R1 := ROut[1];   R2 := ROut[2];   R3 := ROut[3];   R4 := ROut[4];
+        R5 := ROut[5];   R6 := ROut[6];   R7 := ROut[7];   R8 := ROut[8];
         Error := ErrorID <> 0;
         Done := NOT Error;
         Busy := FALSE;
