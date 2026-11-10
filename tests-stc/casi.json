@@ -270,5 +270,17 @@
       "--print",
       "PROVA5.R"
     ]
+  },
+  {
+    "nome": "mw1",
+    "sorgenti": [
+      "mw1.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "60",
+      "--print",
+      "MW.FASE,MW.PAROLA,MW.B1,MW.B10,MW.ALTRA,MW.B17,MW.LETTA"
+    ]
   }
 ]

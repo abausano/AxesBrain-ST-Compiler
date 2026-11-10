@@ -177,6 +177,22 @@ export function writeStc(
   for (const i of bools) symt.u32(i);
   sections.push(["SYMT", symt]);
 
+  // LOCA (11/11/2026): address of every located global (also those not in IOMP), same layout as IOMP: the debug can
+  // write an I/O that the program does not use (for example a merker bit of a %MW word)
+  if (m.located.length) {
+    const loca = new Buf();
+    loca.u32(m.located.length);
+    for (const e of m.located) {
+      loca.u8(e.area);
+      loca.u8(e.size);
+      loca.u16(e.byte);
+      loca.u8(e.bit);
+      loca.u8(e.kind);
+      loca.u32(e.gOff);
+    }
+    sections.push(["LOCA", loca]);
+  }
+
   // LOCS (10/11/2026): variables in the frame of each POU (METHOD, FUNCTION), offsets in the frame; u8 flags bit 0 = BOOL
   if (m.locals.length) {
     const locs = new Buf();

@@ -518,6 +518,8 @@ export interface StcModule {
   symbols: StcSymbol[];
   lines: StcLine[];
   locals: StcLocals[];
+  /** Every located global, also the unused ones (LOCA section, debug writes, 11/11/2026). */
+  located: StcIo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -559,6 +561,7 @@ export class StcGenerator {
   private lines: StcLine[] = [];
   private symbols: StcSymbol[] = [];
   private locals: StcLocals[] = [];
+  private located: StcIo[] = [];
   private itfDecls = new Map<string, InterfaceDeclaration>();
   private io: StcIo[] = [];
   /** Globals referenced by the generated code: only their AT addresses go into IOMP. */
@@ -738,6 +741,11 @@ export class StcGenerator {
     const ioProgrammi = this.io;
     this.io = [];
     for (const g of this.globals.order) {
+      if (g.address && isScalar(g.type)) {
+        // all the located globals, for the debug (LOCA): writing an I/O the program does not use
+        this.addIo(g.address, g.type, g.off);
+        this.located.push(this.io.pop()!);
+      }
       if (
         g.address &&
         (this.options.allLocated === true || this.usedGlobals.has(g.name))
@@ -770,6 +778,7 @@ export class StcGenerator {
       symbols: this.symbols,
       lines: this.lines,
       locals: this.locals,
+      located: this.located,
     };
   }
 

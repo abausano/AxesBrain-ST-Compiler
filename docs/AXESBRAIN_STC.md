@@ -206,6 +206,8 @@ calcolata (`cnt[i](...)`, array di FB).
   pila delle chiamate di un programma in pausa.
 - Mappa righe: oltre all'inizio di ogni istruzione, una voce sull'`END_...` della POU (prima dell'epilogo), dove si
   ferma il passo passo dopo l'ultima istruzione o un `RETURN`.
+- `LOCA` (11/11/2026): stesso formato dell'`IOMP`, l'indirizzo di **tutte** le variabili globali con indirizzo, anche
+  quelle che il programma non usa (che non sono nell'`IOMP`): il debug può scriverle sulla macchina.
 - Una VM che non le conosce le ignora.
 
 ## 7. Bytecode
@@ -362,7 +364,9 @@ globale, tipo.
 - La VM, non il codice, copia le aree: a inizio scansione ingressi `%I` e merker `%M` letti; a fine scansione
   uscite `%Q` e merker `%M` scritti **solo se cambiati** (analisi §12.2).
 - Corrispondenza con AxesBrain: ingresso/uscita digitale n ↔ `%IX/%QX((n-1)/8).((n-1)%8)`; analogici
-  `%IW/%QW n`; merker = I/O virtuali del driver, regola di numerazione da definire.
+  `%IW/%QW n`; merker = I/O virtuali del driver (uscite digitali `Mw.b`): `%MX(2(w-1)+(b-1)/8).((b-1)%8)`, e
+  `%MW(w-1)` = la word dei 16 merker `Mw.1 … Mw.16` (bit 0 = `Mw.1`), che la VM compone dai bit in lettura e scompone
+  in scrittura: non ha un'immagine sua (11/11/2026).
 - I nomi simbolici (`OUT42`, `M1.10`) non sono nel `.stc`: li porta il file di variabili globali generato dall'HMI
   dalla configurazione degli I/O.
 
