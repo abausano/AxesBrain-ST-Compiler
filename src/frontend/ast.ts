@@ -189,6 +189,8 @@ export interface InterfaceDeclaration extends ASTNode {
   name: string;
   extends?: string[];
   methods: MethodDeclaration[];
+  /** PROPERTY of the interface: GET / SET without body (11/11/2026, back-end .stc). */
+  properties?: PropertyDeclaration[];
 }
 
 /**

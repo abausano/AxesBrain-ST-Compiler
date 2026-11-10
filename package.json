@@ -21,6 +21,7 @@
   "scripts": {
     "build": "node scripts/rebuild-libs.mjs",
     "build:tsc-only": "tsc",
+    "build:stc-exe": "npm run build && node scripts/build-stc-exe.mjs",
     "build:stdlib": "node scripts/generate-stdlib.mjs",
     "build:additional-fb": "node scripts/generate-additional-fb.mjs",
     "build:libs": "node scripts/rebuild-libs.mjs",

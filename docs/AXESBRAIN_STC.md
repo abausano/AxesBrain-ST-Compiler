@@ -194,8 +194,10 @@ calcolata (`cnt[i](...)`, array di FB).
   tramite `EXTENDS` o interfacce che la estendono); i FB con `IMPLEMENTS` hanno `__TYPE`. Interfaccia nulla →
   trappola 4 alla lettura del tipo.
 - **Risultati STRING/STRUCT/ARRAY** di METHOD e PROPERTY: come le FUNCTION (§6.2).
-- **Non ancora**: `__NEW`/`__DELETE`, metodo su un'istanza calcolata (`A[i].M()`, la grammatica non lo accetta),
-  `VAR_INST`, PROPERTY nelle interfacce.
+- **PROPERTY nelle interfacce, metodi e proprietà su un percorso** (11/11/2026): `I.P` usa `CALLV` sugli accessori
+  `__GET_P`/`__SET_P` dei FB che implementano l'interfaccia; `A[i].M()`, `A[i].P`, `a.b.M()` (regola `pathCall` del
+  parser, `MethodCallExpression`) mettono in pila l'indirizzo dell'elemento calcolato.
+- **Non ancora**: `__NEW`/`__DELETE`, `VAR_INST`.
 
 ### 6.4 Sezioni facoltative per il debug (11/11/2026)
 
@@ -208,6 +210,13 @@ calcolata (`cnt[i](...)`, array di FB).
   ferma il passo passo dopo l'ultima istruzione o un `RETURN`.
 - `LOCA` (11/11/2026): stesso formato dell'`IOMP`, l'indirizzo di **tutte** le variabili globali con indirizzo, anche
   quelle che il programma non usa (che non sono nell'`IOMP`): il debug può scriverle sulla macchina.
+- `PROP` (11/11/2026): `u32 n; {str nome, u32 offset dell'istanza, u16 POU del GET, u8 tipo}·n`, le PROPERTY di ogni
+  istanza (tipo = kind o 11 STRING; bit 0x80 = BOOL): il debug le legge eseguendo il GET sull'istanza.
+- `STIM` (11/11/2026): `u32 n; u32 indice·n`, i simboli TIME/LTIME (ns; il debug li mostra come `T#…`). In `LOCS` il bit 1
+  dei flag vale TIME, in `PROP` il bit 0x40 del tipo.
+- `SREF` (11/11/2026): `u32 n; u32 indice·n`, i simboli che contengono un indirizzo (INTERFACE, POINTER, REF_TO; in `LOCS`
+  bit 2 dei flag). `INST`: `u32 n; {str nome, u32 offset, u32 dimensione, u8 PROGRAM}·n`, le istanze di FB e PROGRAM: il
+  debug mostra il nome a cui punta un indirizzo.
 - Una VM che non le conosce le ignora.
 
 ## 7. Bytecode
@@ -433,6 +442,12 @@ Scritta da noi in ST, compilata come FB normali (analisi §11.3 punto 4): `TON`,
    accetta solo bit 0…7, come la norma).
 6. Ricarica del programma a macchina accesa: fase successiva (seconda istanza della VM, scambio a fine scansione,
    trasferimento dei valori per nome e tipo).
+
+### 12.9 Eseguibile unico (11/11/2026)
+
+`npm run build:stc-exe` (`scripts/build-stc-exe.mjs`): bundle esbuild di `cli-stc` + Single Executable Application di
+Node.js con il `node.exe` locale e `postject`. In `dist/stc`: `axesbrain-stc.exe`, `libs/*.st`, licenze e `LEGGIMI.txt`. Stessa
+riga di comando di `node dist/backend-stc/cli-stc.js`, stessi `.stc`.
 
 ## 13. Stato del prototipo (09/11/2026)
 

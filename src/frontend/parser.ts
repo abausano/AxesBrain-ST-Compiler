@@ -192,9 +192,21 @@ export class STParser extends CstParser {
         DEF: () => this.CONSUME2(tokens.Identifier),
       });
     });
-    // Interface methods (abstract, no body)
+    // Interface methods (abstract, no body) and properties (GET / SET without body)
     this.MANY(() => {
-      this.SUBRULE(this.interfaceMethodDeclaration);
+      this.OR({
+        DEF: [
+          {
+            ALT: () => this.SUBRULE(this.interfaceMethodDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.METHOD,
+          },
+          {
+            ALT: () => this.SUBRULE(this.propertyDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.PROPERTY,
+          },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
     });
     this.CONSUME(tokens.END_INTERFACE);
   });
@@ -981,7 +993,7 @@ export class STParser extends CstParser {
         // subscripted variable and then demand `:=`.
         {
           ALT: () => this.SUBRULE(this.instanceCallStatement),
-          GATE: () => this.isInstanceCallAhead(),
+          GATE: () => this.isInstanceCallAhead() || this.isPathCallAhead(),
         },
         // assignmentStatement and functionCallStatement both start with Identifier;
         // Chevrotain resolves by trying assignmentStatement first (it has := after the LHS)
@@ -1229,6 +1241,64 @@ export class STParser extends CstParser {
     }
     return false;
   }
+
+  /**
+   * Lookahead helper (11/11/2026): a method call on a path that the other call rules do not take:
+   * `units[i].M(…)`, `grid[i, j].M(…)`, `a.b.M(…)`. The path ends with `.name(` and has a subscript or at
+   * least two dots (`a.M(` stays with methodCall, `units[0](` with the instance call).
+   */
+  private isPathCallAhead(): boolean {
+    if (!this.isIdentifierOrKeywordToken(this.LA(1).tokenType)) return false;
+    const MAX_LOOKAHEAD = 96;
+    let i = 2;
+    let dots = 0;
+    let subscripts = 0;
+    let lastWasField = false;
+    while (i <= MAX_LOOKAHEAD) {
+      const t = this.LA(i)?.tokenType;
+      if (t === undefined) return false;
+      if (t === tokens.LBracket) {
+        let depth = 0;
+        for (; i <= MAX_LOOKAHEAD; i++) {
+          const u = this.LA(i)?.tokenType;
+          if (u === undefined || u === tokens.Semicolon) return false;
+          if (u === tokens.LBracket) depth++;
+          else if (u === tokens.RBracket) {
+            depth--;
+            if (depth === 0) break;
+          }
+        }
+        subscripts++;
+        lastWasField = false;
+        i++;
+        continue;
+      }
+      if (t === tokens.Dot) {
+        if (!this.isIdentifierOrKeywordToken(this.LA(i + 1)?.tokenType))
+          return false;
+        dots++;
+        lastWasField = true;
+        i += 2;
+        continue;
+      }
+      return (
+        t === tokens.LParen && lastWasField && (subscripts > 0 || dots >= 2)
+      );
+    }
+    return false;
+  }
+
+  /**
+   * `units[i].M(args)` expression: method call on a path (built as a MethodCallExpression).
+   */
+  public pathCall = this.RULE("pathCall", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
+  });
 
   /**
    * instance.method(args); statement
@@ -1697,6 +1767,11 @@ export class STParser extends CstParser {
         {
           ALT: () => this.SUBRULE(this.structInitializer),
           GATE: () => this.isStructInitializerAhead(),
+        },
+        // `units[i].M(…)`, `a.b.M(…)`: method call on an element or a nested instance (11/11/2026)
+        {
+          ALT: () => this.SUBRULE(this.pathCall),
+          GATE: () => this.isPathCallAhead(),
         },
         // functionCall and variable both start with Identifier;
         // functionCall needs Ident( lookahead to disambiguate

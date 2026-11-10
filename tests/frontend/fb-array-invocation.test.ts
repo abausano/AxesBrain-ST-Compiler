@@ -183,14 +183,12 @@ describe("function block array element invocation — no effect on other stateme
     expect(call.instance).toBeUndefined();
   });
 
-  it("leaves a method call on an array element unparsed (pre-existing gap)", () => {
-    // `cs[0].Bump()` is a *method* call on an element, which the expression
-    // grammar still doesn't accept — `isMethodCallAhead` wants `ident . ident (`
-    // and this is `ident [ … ] . ident (`. Unchanged by the element-invocation
-    // rule, whose gate only fires when `(` follows `]` directly. Recorded here
-    // so the day it starts parsing is a deliberate change, not a surprise.
-    const { errors } = parse(
-      uppercaseSource(`
+  it("parses a method call on an array element as a MethodCallExpression", () => {
+    // `cs[0].Bump()` is a *method* call on an element. It used to be a parse error (the
+    // expression grammar wanted `ident . ident (`); since 11/11/2026 the path-call rule takes
+    // `ident [ … ] . ident (` and `a.b.M(`, and builds a MethodCallExpression on `cs[0]`
+    // (AxesBrain .stc back-end, Modifica fatta da Claude).
+    const ast = parseOk(`
       FUNCTION_BLOCK Counter
         VAR n : INT; END_VAR
         METHOD Bump : INT
@@ -201,9 +199,18 @@ describe("function block array element invocation — no effect on other stateme
       PROGRAM Main
         VAR cs : ARRAY[0..1] OF Counter; r : INT; END_VAR
         r := cs[0].Bump();
+        cs[1].Bump();
       END_PROGRAM
-    `),
-    );
-    expect(errors.length).toBeGreaterThan(0);
+    `);
+    const body = ast.programs[0]!.body;
+    const assign = body[0]!;
+    expect(assign.kind).toBe("AssignmentStatement");
+    const value = (assign as { value: { kind: string; methodName?: string; object?: { name: string } } }).value;
+    expect(value.kind).toBe("MethodCallExpression");
+    expect(value.methodName).toBe("BUMP");
+    expect(value.object?.name).toBe("CS");
+    const stmt = body[1]!;
+    expect(stmt.kind).toBe("FunctionCallStatement");
+    expect((stmt as { call: { kind: string } }).call.kind).toBe("MethodCallExpression");
   });
 });

@@ -680,12 +680,18 @@ export class ASTBuilder {
     for (const methodNode of getAllNodes(children.interfaceMethodDeclaration)) {
       methods.push(this.buildInterfaceMethodDeclaration(methodNode));
     }
+    // Interface properties (11/11/2026)
+    const properties: PropertyDeclaration[] = [];
+    for (const propNode of getAllNodes(children.propertyDeclaration)) {
+      properties.push(this.buildPropertyDeclaration(propNode));
+    }
 
     return {
       kind: "InterfaceDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
       methods,
+      ...(properties.length > 0 ? { properties } : {}),
       ...(extendsList !== undefined ? { extends: extendsList } : {}),
     };
   }
@@ -2632,6 +2638,11 @@ export class ASTBuilder {
       );
     }
 
+    // `units[i].M(args)`: method call on a path (11/11/2026)
+    if (children.pathCall) {
+      return this.buildPathCall(getFirstNode(children.pathCall)!);
+    }
+
     // Check for method call expression: instance.method(args)
     if (children.methodCall) {
       return this.buildMethodCallExpression(getFirstNode(children.methodCall)!);
@@ -3523,6 +3534,17 @@ export class ASTBuilder {
       }
     }
 
+    // `units[i].M(args);`: the path ends with a field, it is a method call on the rest (11/11/2026)
+    const asMethod = instance
+      ? this.pathToMethodCall(instance, args, node)
+      : undefined;
+    if (asMethod)
+      return {
+        kind: "FunctionCallStatement",
+        sourceSpan: nodeToSourceSpan(node),
+        call: asMethod,
+      };
+
     return {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
@@ -3533,6 +3555,63 @@ export class ASTBuilder {
         arguments: args,
         ...(instance !== undefined ? { instance } : {}),
       },
+    };
+  }
+
+  /** `units[i].M(args)` expression. */
+  buildPathCall(node: CstNode): Expression {
+    const children = node.children as CstChildren;
+    const variableNode = getFirstNode(children.variable)!;
+    const path = this.buildVariableExpression(variableNode);
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+    return (
+      this.pathToMethodCall(path, args, node) ?? {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: path.name,
+        arguments: args,
+        instance: path,
+      }
+    );
+  }
+
+  /**
+   * A path whose last access is a field (`units[i].M`, `a.b.M`) called with arguments: MethodCallExpression on the
+   * path without its last field. Undefined when the path does not end with a field.
+   */
+  private pathToMethodCall(
+    path: VariableExpression,
+    args: Argument[],
+    node: CstNode,
+  ): MethodCallExpression | undefined {
+    const chain = path.accessChain ?? [];
+    const last = chain[chain.length - 1];
+    if (!last || last.kind !== "field") return undefined;
+    const rest = chain.slice(0, -1);
+    const object: VariableExpression = {
+      kind: "VariableExpression",
+      sourceSpan: path.sourceSpan,
+      name: path.name,
+      subscripts: rest.flatMap((s) =>
+        s.kind === "subscript" ? s.indices : [],
+      ),
+      fieldAccess: rest.flatMap((s) => (s.kind === "field" ? [s.name] : [])),
+      isDereference: rest.some((s) => s.kind === "dereference"),
+    };
+    if (rest.length > 0) object.accessChain = rest;
+    return {
+      kind: "MethodCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      object,
+      methodName: last.name,
+      arguments: args,
     };
   }
 

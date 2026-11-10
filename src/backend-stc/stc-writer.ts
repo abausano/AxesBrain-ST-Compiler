@@ -177,6 +177,51 @@ export function writeStc(
   for (const i of bools) symt.u32(i);
   sections.push(["SYMT", symt]);
 
+  // SREF and INST (11/11/2026): symbols holding an address (INTERFACE, POINTER, REF_TO) and the FB/PROGRAM instances,
+  // so the debug can show "-> P1.ASSI[2]" instead of the address
+  const refs = m.symbols.map((s, i) => (s.ref ? i : -1)).filter((i) => i >= 0);
+  if (refs.length) {
+    const sref = new Buf();
+    sref.u32(refs.length);
+    for (const i of refs) sref.u32(i);
+    sections.push(["SREF", sref]);
+  }
+  if (m.instances.length) {
+    const inst = new Buf();
+    inst.u32(m.instances.length);
+    for (const x of m.instances) {
+      inst.str(x.name);
+      inst.u32(x.off);
+      inst.u32(x.size);
+      inst.u8(x.prog ? 1 : 0);
+    }
+    sections.push(["INST", inst]);
+  }
+
+  // STIM (11/11/2026): indices of the DBUG symbols that are TIME/LTIME (ns; the debug shows T#...)
+  const times = m.symbols
+    .map((s, i) => (s.time ? i : -1))
+    .filter((i) => i >= 0);
+  if (times.length) {
+    const stim = new Buf();
+    stim.u32(times.length);
+    for (const i of times) stim.u32(i);
+    sections.push(["STIM", stim]);
+  }
+
+  // PROP (11/11/2026): properties of FB instances, read by the debug through their GET
+  if (m.props.length) {
+    const prop = new Buf();
+    prop.u32(m.props.length);
+    for (const p of m.props) {
+      prop.str(p.name);
+      prop.u32(p.inst);
+      prop.u16(p.pou);
+      prop.u8(p.kind);
+    }
+    sections.push(["PROP", prop]);
+  }
+
   // LOCA (11/11/2026): address of every located global (also those not in IOMP), same layout as IOMP: the debug can
   // write an I/O that the program does not use (for example a merker bit of a %MW word)
   if (m.located.length) {
@@ -205,7 +250,7 @@ export function writeStc(
         locs.u8(v.kind);
         locs.u32(v.gOff);
         locs.u32(v.count);
-        locs.u8(v.bool ? 1 : 0);
+        locs.u8((v.bool ? 1 : 0) | (v.time ? 2 : 0) | (v.ref ? 4 : 0));
       }
     }
     sections.push(["LOCS", locs]);

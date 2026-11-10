@@ -26,8 +26,10 @@ import type {
   FunctionCallExpression,
   FunctionDeclaration,
   InterfaceDeclaration,
+  MethodCallExpression,
   MethodDeclaration,
   ProgramDeclaration,
+  PropertyDeclaration,
   Statement,
   StructDefinition,
   TypeDeclaration,
@@ -164,6 +166,15 @@ const isUnsigned = (s: ScalarT) =>
   s.kind === Kind.U32 ||
   s.kind === Kind.U64;
 const isBool = (s: ScalarT) => s.name === "BOOL";
+/** Debug flags of a symbol: BOOL shown as TRUE/FALSE, TIME/LTIME as T#... (SYMT, STIM, LOCS, 11/11/2026). */
+const debugFlags = (s: ScalarT): { bool?: true; time?: true; ref?: true } =>
+  s.name === "BOOL"
+    ? { bool: true }
+    : s.name === "TIME" || s.name === "LTIME"
+      ? { time: true }
+      : s.itf !== undefined || s.to !== undefined
+        ? { ref: true }
+        : {};
 const isScalar = (t: VT | undefined): t is ScalarT => t?.t === "scalar";
 const TEMPORAL = new Set([
   "TIME",
@@ -497,6 +508,10 @@ export interface StcSymbol {
   count: number;
   /** BOOL (shown as TRUE/FALSE by the debug; SYMT section). */
   bool?: boolean;
+  /** TIME/LTIME in ns (shown as T#...; STIM section). */
+  time?: boolean;
+  /** INTERFACE, POINTER, REF_TO: an address, shown as the name it points to (SREF section). */
+  ref?: boolean;
 }
 /** Variables in the frame of a POU (METHOD, FUNCTION, VAR_TEMP): debug while paused (LOCS section). */
 export interface StcLocals {
@@ -520,6 +535,24 @@ export interface StcModule {
   locals: StcLocals[];
   /** Every located global, also the unused ones (LOCA section, debug writes, 11/11/2026). */
   located: StcIo[];
+  /** PROPERTY of FB instances, read by the debug through their GET (PROP section, 11/11/2026). */
+  props: StcProp[];
+  /** FB and PROGRAM instances: name, offset, size (INST section: the debug names an address). */
+  instances: StcInstance[];
+}
+export interface StcInstance {
+  name: string;
+  off: number;
+  size: number;
+  /** PROGRAM instance (an address at its start is first the FB inside it). */
+  prog?: boolean;
+}
+export interface StcProp {
+  name: string;
+  inst: number;
+  pou: number;
+  /** Result kind, or SYM_STRING. */
+  kind: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +595,8 @@ export class StcGenerator {
   private symbols: StcSymbol[] = [];
   private locals: StcLocals[] = [];
   private located: StcIo[] = [];
+  private props: StcProp[] = [];
+  private instances: StcInstance[] = [];
   private itfDecls = new Map<string, InterfaceDeclaration>();
   private io: StcIo[] = [];
   /** Globals referenced by the generated code: only their AT addresses go into IOMP. */
@@ -698,6 +733,12 @@ export class StcGenerator {
       this.symbolsFor(g.name, g.type, g.off);
     }
     for (const i of instOffsets) {
+      this.instances.push({
+        name: i.name,
+        off: i.off,
+        size: i.pou.inst.size,
+        prog: true,
+      });
       this.writeInstInit(this.data, i.pou.inst, i.off);
       for (const v of i.pou.inst.order) {
         if (v.indirect || v.section === "HIDDEN") continue;
@@ -779,6 +820,8 @@ export class StcGenerator {
       lines: this.lines,
       locals: this.locals,
       located: this.located,
+      props: this.props,
+      instances: this.instances,
     };
   }
 
@@ -1648,7 +1691,7 @@ export class StcGenerator {
           kind: t.kind,
           gOff: abs,
           count: 1,
-          ...(isBool(t) ? { bool: true } : {}),
+          ...debugFlags(t),
         });
         return;
       case "string":
@@ -1662,7 +1705,7 @@ export class StcGenerator {
             kind: t.elem.kind,
             gOff: abs,
             count: n,
-            ...(isBool(t.elem) ? { bool: true } : {}),
+            ...debugFlags(t.elem),
           });
           return;
         }
@@ -1694,9 +1737,37 @@ export class StcGenerator {
         return;
       case "fb": {
         const p = this.pouByName.get(t.name)!;
+        this.instances.push({ name, off: abs, size: p.inst.size });
         for (const v of p.inst.order)
           if (!v.indirect && v.section !== "HIDDEN")
             this.symbolsFor(`${name}.${v.name}`, v.type, abs + v.off);
+        // PROPERTY of the instance (its GET, also inherited): the debug can read it (PROP section, 11/11/2026)
+        const seen = new Set<string>();
+        for (let c: PouInfo | undefined = p; c; c = c.base)
+          for (const k of c.methods?.keys() ?? []) {
+            if (!k.startsWith("__GET_") || seen.has(k)) continue;
+            seen.add(k);
+            const g = this.methodOf(p, k);
+            if (!g || g.isAbstract) continue;
+            this.layoutPou(g);
+            const rt = g.ret?.type;
+            // BOOL: kind | 0x80 (shown as TRUE/FALSE)
+            const kind =
+              rt && rt.t === "scalar"
+                ? rt.kind |
+                  (isBool(rt) ? 0x80 : 0) |
+                  (debugFlags(rt).time ? 0x40 : 0)
+                : rt && rt.t === "string"
+                  ? SYM_STRING
+                  : 0;
+            if (kind)
+              this.props.push({
+                name: `${name}.${k.slice(6)}`,
+                inst: abs,
+                pou: g.index,
+                kind,
+              });
+          }
         return;
       }
     }
@@ -1794,7 +1865,7 @@ export class StcGenerator {
           kind: t.kind,
           gOff: v.off,
           count: 1,
-          ...(isBool(t) ? { bool: true } : {}),
+          ...debugFlags(t),
         });
       else if (t.t === "string")
         vars.push({ name: v.name, kind: SYM_STRING, gOff: v.off, count: 1 });
@@ -1807,7 +1878,7 @@ export class StcGenerator {
           kind: t.elem.t === "scalar" ? t.elem.kind : SYM_STRING,
           gOff: v.off,
           count: this.count(t),
-          ...(t.elem.t === "scalar" && isBool(t.elem) ? { bool: true } : {}),
+          ...(t.elem.t === "scalar" ? debugFlags(t.elem) : {}),
         });
     }
     if (vars.length) this.locals.push({ pou: p.index, vars });
@@ -1960,9 +2031,10 @@ export class StcGenerator {
         this.returnJumps.push(this.code.jump(Op.JMP));
         return;
       case "FunctionCallStatement": {
-        if (s.call.kind !== "FunctionCallExpression")
-          this.fail("Chiamata di metodo non ancora supportata", s);
-        const call = s.call;
+        const call =
+          s.call.kind === "MethodCallExpression"
+            ? this.fromMethodCall(s.call)
+            : s.call;
         if (this.isFbCall(call)) {
           this.genFbCall(call);
         } else {
@@ -2053,6 +2125,8 @@ export class StcGenerator {
 
   /** "inst.M", "THIS.M", "SUPER.M" or "M" inside an FB, when M is a method. */
   private methodTarget(e: FunctionCallExpression): MethodTarget | undefined {
+    if (e.instance && e.functionName.startsWith("__OBJ."))
+      return this.objectTarget(e.instance, e.functionName.slice(6), e);
     if (e.instance) return undefined;
     const name = e.functionName;
     const own = this.ownerFb();
@@ -2080,7 +2154,20 @@ export class StcGenerator {
       } else {
         const v = this.findVar(head);
         if (v && isScalar(v.slot.type) && v.slot.type.itf)
-          return this.interfaceTarget(v, v.slot.type.itf, mname, e);
+          return this.interfaceTarget(
+            () => {
+              let p: Place = {
+                base: v.base,
+                off: v.slot.off,
+                type: v.slot.type,
+              };
+              if (v.slot.indirect) p = this.derefSlot(p);
+              this.load(T_LINT, p.base, p.off);
+            },
+            v.slot.type.itf,
+            mname,
+            e,
+          );
         if (!v || v.slot.type.t !== "fb") return undefined;
         fb = this.pouByName.get(v.slot.type.name);
         const vv = v;
@@ -2118,11 +2205,11 @@ export class StcGenerator {
   }
 
   /**
-   * "I.M()" with I an INTERFACE variable: the address of the instance is in I; CALLV with every reachable FB that
-   * implements the interface (a null I traps on the type read).
+   * "I.M()" with I an INTERFACE value: pushThis leaves the address of the instance; CALLV with every reachable FB
+   * that implements the interface (a null I traps on the type read). Also GET/SET of interface properties.
    */
   private interfaceTarget(
-    v: { slot: VarSlot; base: Base },
+    pushThis: () => void,
     itf: string,
     mname: string,
     node: unknown,
@@ -2144,37 +2231,102 @@ export class StcGenerator {
         `${itf}.${mname}: nessun FUNCTION_BLOCK del programma lo implementa`,
         node,
       );
+    return { pushThis, fb: first.fb, m: first.m, virtual: true, impls };
+  }
+
+  /** PROPERTY of an INTERFACE (or of an interface it extends). */
+  private itfProperty(
+    itf: string,
+    name: string,
+    seen = new Set<string>(),
+  ): PropertyDeclaration | undefined {
+    if (seen.has(itf)) return undefined;
+    seen.add(itf);
+    const d = this.itfDecls.get(itf);
+    if (!d) return undefined;
+    const p = d.properties?.find((x) => x.name === name);
+    if (p) return p;
+    for (const b of d.extends ?? []) {
+      const q = this.itfProperty(b, name, seen);
+      if (q) return q;
+    }
+    return undefined;
+  }
+
+  /** "obj.M()" with obj a path (array element, field): FB instance or INTERFACE value (11/11/2026). */
+  private objectTarget(
+    obj: Expression,
+    mname: string,
+    node: unknown,
+  ): MethodTarget | undefined {
+    const ot = this.typeOf(obj);
+    if (ot && ot.t === "fb") {
+      const fb = this.pouByName.get(ot.name);
+      if (!fb) return undefined;
+      this.layoutPou(fb);
+      const m = this.methodOf(fb, mname);
+      if (!m) return undefined;
+      return {
+        pushThis: () => {
+          const p = this.genPlaceExpr(obj);
+          if (isBitPlace(p)) this.fail("Istanza non valida", node);
+          this.pushAddr(p);
+        },
+        fb,
+        m,
+        virtual: true,
+      };
+    }
+    if (isScalar(ot) && ot.itf) {
+      const it = ot;
+      return this.interfaceTarget(
+        () => void this.genExpr(obj, it),
+        it.itf!,
+        mname,
+        node,
+      );
+    }
+    return undefined;
+  }
+
+  /** MethodCallExpression (`units[i].M()`, chained calls) as a call on an object. */
+  private fromMethodCall(e: MethodCallExpression): FunctionCallExpression {
     return {
-      pushThis: () => {
-        let p: Place = { base: v.base, off: v.slot.off, type: v.slot.type };
-        if (v.slot.indirect) p = this.derefSlot(p);
-        this.load(T_LINT, p.base, p.off);
-      },
-      fb: first.fb,
-      m: first.m,
-      virtual: true,
-      impls,
-    };
+      kind: "FunctionCallExpression",
+      ...(e.sourceSpan ? { sourceSpan: e.sourceSpan } : {}),
+      functionName: `__OBJ.${e.methodName}`,
+      arguments: e.arguments,
+      instance: e.object,
+    } as FunctionCallExpression;
+  }
+
+  /** GET or SET of a property target as a method call. */
+  private accessor(
+    pt: { pushThis: () => void; fb?: PouInfo; name: string; itf?: string },
+    kind: "GET" | "SET",
+    node: unknown,
+  ): MethodTarget | undefined {
+    const mname = `__${kind}_${pt.name}`;
+    if (pt.itf) return this.interfaceTarget(pt.pushThis, pt.itf, mname, node);
+    const m = this.methodOf(pt.fb!, mname);
+    if (!m) return undefined;
+    return { pushThis: pt.pushThis, fb: pt.fb!, m, virtual: true };
   }
 
   /** PROPERTY of type STRING/STRUCT/ARRAY read through GET: leaves the address of the result on the stack. */
   private genAggProperty(e: VariableExpression, wantString: boolean): boolean {
     const pt = this.propertyTarget(e);
     if (!pt) return false;
-    const g = this.methodOf(pt.fb, `__GET_${pt.name}`);
+    const g = this.accessor(pt, "GET", e);
     if (!g) this.fail(`Proprietà ${pt.name} senza GET`, e);
-    this.layoutPou(g);
+    this.layoutPou(g.m);
     if (
-      !g.ret ||
-      isScalar(g.ret.type) ||
-      (wantString && g.ret.type.t !== "string")
+      !g.m.ret ||
+      isScalar(g.m.ret.type) ||
+      (wantString && g.m.ret.type.t !== "string")
     )
       this.fail(`Proprietà ${pt.name}: tipo non adatto qui`, e);
-    this.genMethodInvoke(
-      { pushThis: pt.pushThis, fb: pt.fb, m: g, virtual: true },
-      () => {},
-      e,
-    );
+    this.genMethodInvoke(g, () => {}, e);
     return true;
   }
 
@@ -2234,59 +2386,79 @@ export class StcGenerator {
     this.code.u16(own.base.index);
   }
 
-  /** "inst.P", "THIS.P" or "P" inside an FB, when P is a PROPERTY. */
+  /**
+   * "inst.P", "A[i].P", "a.b.P", "THIS.P", "I.P" (INTERFACE) or "P" inside an FB, when P is a PROPERTY.
+   */
   private propertyTarget(
     e: VariableExpression,
-  ): { pushThis: () => void; fb: PouInfo; name: string } | undefined {
-    if (e.subscripts.length || e.isDereference) return undefined;
+  ):
+    | { pushThis: () => void; fb?: PouInfo; name: string; itf?: string }
+    | undefined {
     const chain = this.accessChain(e);
-    let fb: PouInfo | undefined;
-    let pname: string;
-    let pushThis: () => void;
     if (chain.length === 0) {
       const own = this.ownerFb();
       if (!own || this.findVar(e.name)) return undefined;
-      fb = own;
-      pname = e.name;
-      pushThis = () => this.addr(Base.I, 0);
-    } else if (chain.length === 1 && chain[0]!.kind === "field") {
-      const v = this.findVar(e.name);
-      if (!v || v.slot.type.t !== "fb") return undefined;
-      fb = this.pouByName.get(v.slot.type.name);
-      pname = chain[0]!.name;
+      this.layoutPou(own);
+      if (
+        !this.methodOf(own, `__GET_${e.name}`) &&
+        !this.methodOf(own, `__SET_${e.name}`)
+      )
+        return undefined;
+      return { pushThis: () => this.addr(Base.I, 0), fb: own, name: e.name };
+    }
+    const last = chain[chain.length - 1]!;
+    if (last.kind !== "field") return undefined;
+    const prefix: VariableExpression = {
+      ...e,
+      accessChain: chain.slice(0, -1),
+      fieldAccess: [],
+      subscripts: [],
+      isDereference: false,
+    };
+    if (!this.findVar(prefix.name)) return undefined;
+    const ptype = this.varType(prefix);
+    const pname = last.name;
+    if (ptype && ptype.t === "fb") {
+      const fb = this.pouByName.get(ptype.name);
       if (!fb || this.fbInst(fb.name).vars.has(pname)) return undefined;
-      const vv = v;
-      pushThis = () => {
-        let p: Place = { base: vv.base, off: vv.slot.off, type: vv.slot.type };
-        if (vv.slot.indirect) p = this.derefSlot(p);
-        this.pushAddr(p);
+      this.layoutPou(fb);
+      if (
+        !this.methodOf(fb, `__GET_${pname}`) &&
+        !this.methodOf(fb, `__SET_${pname}`)
+      )
+        return undefined;
+      return {
+        pushThis: () => {
+          const p = this.genPlace(prefix);
+          if (isBitPlace(p)) this.fail("Istanza non valida", e);
+          this.pushAddr(p);
+        },
+        fb,
+        name: pname,
       };
-    } else return undefined;
-    if (!fb) return undefined;
-    this.layoutPou(fb);
-    if (
-      !this.methodOf(fb, `__GET_${pname}`) &&
-      !this.methodOf(fb, `__SET_${pname}`)
-    )
-      return undefined;
-    return { pushThis, fb, name: pname };
+    }
+    if (isScalar(ptype) && ptype.itf) {
+      if (!this.itfProperty(ptype.itf, pname)) return undefined;
+      const it = ptype;
+      return {
+        pushThis: () => void this.genExpr(prefix, it),
+        name: pname,
+        itf: it.itf!,
+      };
+    }
+    return undefined;
   }
 
   /** Read a PROPERTY (GET): leaves the scalar value on the stack. */
   private genPropertyGet(e: VariableExpression): ScalarT | undefined {
     const pt = this.propertyTarget(e);
     if (!pt) return undefined;
-    const g = this.methodOf(pt.fb, `__GET_${pt.name}`);
+    const g = this.accessor(pt, "GET", e);
     if (!g) this.fail(`Proprietà ${pt.name} senza GET`, e);
-    this.layoutPou(g);
-    if (!g.ret || !isScalar(g.ret.type))
-      this.fail(`Proprietà ${pt.name}: solo tipi elementari per ora`, e);
-    this.genMethodInvoke(
-      { pushThis: pt.pushThis, fb: pt.fb, m: g, virtual: true },
-      () => {},
-      e,
-    );
-    return g.ret.type;
+    this.layoutPou(g.m);
+    if (!g.m.ret || !isScalar(g.m.ret.type)) return undefined;
+    this.genMethodInvoke(g, () => {}, e);
+    return g.m.ret.type;
   }
 
   /** Write a PROPERTY (SET); false if the target is not a property. */
@@ -2294,13 +2466,12 @@ export class StcGenerator {
     if (target.kind !== "VariableExpression") return false;
     const pt = this.propertyTarget(target);
     if (!pt) return false;
-    const s = this.methodOf(pt.fb, `__SET_${pt.name}`);
+    const s = this.accessor(pt, "SET", target);
     if (!s) this.fail(`Proprietà ${pt.name} senza SET`, target);
-    this.layoutPou(s);
-    const prm = s.params[0]!;
-    const vt = prm.slot.type;
+    this.layoutPou(s.m);
+    const vt = s.m.params[0]!.slot.type;
     this.genMethodInvoke(
-      { pushThis: pt.pushThis, fb: pt.fb, m: s, virtual: true },
+      s,
       () => {
         if (isScalar(vt)) this.genExpr(value, vt);
         else if (vt.t === "string") this.genStrSrc(value);
@@ -2431,9 +2602,13 @@ export class StcGenerator {
   private varType(e: VariableExpression): VT | undefined {
     const pt = this.propertyTarget(e);
     if (pt) {
+      if (pt.itf) {
+        const pd = this.itfProperty(pt.itf, pt.name);
+        return pd ? this.resolveType(pd.type) : undefined;
+      }
       const g =
-        this.methodOf(pt.fb, `__GET_${pt.name}`) ??
-        this.methodOf(pt.fb, `__SET_${pt.name}`)!;
+        this.methodOf(pt.fb!, `__GET_${pt.name}`) ??
+        this.methodOf(pt.fb!, `__SET_${pt.name}`)!;
       this.layoutPou(g);
       return g.ret?.type ?? g.params[0]?.slot.type;
     }
@@ -2597,6 +2772,8 @@ export class StcGenerator {
   private genStrInto(e: Expression, dst: StringT): void {
     if (e.kind === "ParenthesizedExpression")
       return this.genStrInto(e.expression, dst);
+    if (e.kind === "MethodCallExpression")
+      return this.genStrInto(this.fromMethodCall(e), dst);
     if (e.kind === "VariableExpression" && this.genAggProperty(e, true)) {
       this.str(StrFn.ASSIGN);
       return;
@@ -2641,7 +2818,9 @@ export class StcGenerator {
   }
 
   /** Push the address of a STRUCT/ARRAY value. */
-  private genAggSrc(e: Expression, want: VT) {
+  private genAggSrc(e: Expression, want: VT): void {
+    if (e.kind === "MethodCallExpression")
+      return this.genAggSrc(this.fromMethodCall(e), want);
     if (this.isLvalue(e)) {
       this.genAddressOf(e);
       return;
@@ -2831,6 +3010,8 @@ export class StcGenerator {
 
   /** Static type of an expression; undefined for untyped integer literals. */
   private typeOf(e: Expression): VT | undefined {
+    if (e.kind === "MethodCallExpression")
+      return this.typeOf(this.fromMethodCall(e));
     if (e.kind === "FunctionCallExpression") {
       const d = this.desugar(e);
       if (d) return this.typeOf(d);
@@ -3070,6 +3251,8 @@ export class StcGenerator {
       }
       case "BinaryExpression":
         return this.genBinary(e.operator, e.left, e.right, want);
+      case "MethodCallExpression":
+        return this.genExprRaw(this.fromMethodCall(e), want);
       case "FunctionCallExpression": {
         const d = this.desugar(e);
         if (d) return this.genExprRaw(d, want);
@@ -3209,6 +3392,7 @@ export class StcGenerator {
   // -------------------------------------------------------------------------
 
   private isFbCall(e: FunctionCallExpression): boolean {
+    if (e.functionName.startsWith("__OBJ.")) return false;
     if (e.instance) {
       const t = this.typeOf(e.instance);
       return !!t && t.t === "fb";
