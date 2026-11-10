@@ -198,5 +198,17 @@
       "--print",
       "G1.GIRO,G1.OK1,G1.A,G1.B,G1.OK2,G1.OK3,G1.FUORI,G1.NCOPIATI,G1.NLETTI,G1.NFUORI,G1.LETTI"
     ]
+  },
+  {
+    "nome": "righe1",
+    "sorgenti": [
+      "righe1.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "20",
+      "--print",
+      "P.K.Y"
+    ]
   }
 ]

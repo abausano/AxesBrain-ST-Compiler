@@ -42,6 +42,18 @@ describe("IL Detection", () => {
   it("should handle comments-only body as ST", () => {
     expect(isILBody("(* just a comment *)")).toBe(false);
   });
+
+  it("should detect ST body starting with a call split over lines", () => {
+    // Instance names that are also IL operators (R, S, ST)
+    expect(isILBody("R(A := X,\n  B := X);\nY := R.Q;\n")).toBe(false);
+    expect(isILBody("S (IN := TRUE,\n  PT := T#1s);\n")).toBe(false);
+    expect(isILBody("ST(Execute := E,\n  NomePP := 'A.PP');\n")).toBe(false);
+  });
+
+  it("should still detect IL CAL with formal parameters", () => {
+    expect(isILBody("CAL fb(IN := TRUE,\n  PT := T#1s)\nLD fb.Q\n")).toBe(true);
+    expect(isILBody("AND( x\nOR y\n)\n")).toBe(true);
+  });
 });
 
 describe("IL Parser", () => {

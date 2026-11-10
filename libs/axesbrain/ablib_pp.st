@@ -143,7 +143,9 @@ FUNCTION_BLOCK MC_Power
   VAR_INPUT Enable : BOOL; END_VAR
   VAR_OUTPUT Status : BOOL; Valid : BOOL; Error : BOOL; ErrorID : DINT; END_VAR
   VAR R : AB_RunPP; Ultimo : BOOL; Richiesta : BOOL; Obiettivo : BOOL; Primo : BOOL := TRUE; END_VAR
-  IF (Enable <> Ultimo OR Primo) AND NOT R.Busy AND NOT Richiesta THEN
+  (* Nuova richiesta solo con AB_RunPP a riposo (non Busy, Done/Error gia' tolti): cosi' Execute resta basso
+     almeno una scansione e AB_RunPP vede il fronte di salita (10/11/2026). *)
+  IF (Enable <> Ultimo OR Primo) AND NOT R.Busy AND NOT R.Done AND NOT R.Error AND NOT Richiesta THEN
     Obiettivo := Enable;
     Ultimo := Enable;
     Richiesta := TRUE;

@@ -183,6 +183,15 @@ export function isILBody(bodyText: string): boolean {
     // identifier in `<func>(...)`.
     if (line.endsWith(";")) return false;
 
+    // An ST call split over several lines (`R(A := X,` on the first line,
+    // no `;` yet) whose instance name is also an IL operator (R, S, ST, ...).
+    // In IL a parenthesized operator (`AND(`) never contains `:=`, and formal
+    // parameters only appear with CAL/CALC/CALCN: so `name( ... :=` without
+    // CAL is ST. (AB&T, 10/11/2026. Modifica fatta da Claude.)
+    const callMatch = /^(\w+)\s*\(/.exec(line);
+    if (callMatch && colEqIdx > parenIdx && !/^CALC?N?$/i.test(callMatch[1]!))
+      return false;
+
     // Check for IL operator pattern.
     if (IL_LINE_PATTERN.test(line)) return true;
     if (LABEL_ONLY_PATTERN.test(line)) return true;
