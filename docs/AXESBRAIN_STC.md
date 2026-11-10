@@ -333,7 +333,8 @@ globale, tipo.
   del primo carattere, capacità nei 4 byte prima); un array di elementari o di STRING è un solo simbolo col
   conteggio degli elementi (per righe); gli array di STRUCT o di FB si espandono per elemento (`Main.M[1,2].X`).
   I `VAR_IN_OUT` (indirizzi) non sono simboli.
-- **Mappa righe**: per ogni POU, coppie (offset nel codice → file, riga, colonna) all'inizio di ogni istruzione ST.
+- **Mappa righe**: per ogni POU, coppie (offset nel codice → file, riga, colonna) all'inizio di ogni istruzione ST. L'offset (`pc`) è
+  relativo all'inizio del codice della POU (`codeOff` della sezione POUS), non al blocco CODE intero.
 - **Breakpoint**: la VM sostituisce il primo codice operativo della riga con `BRK` e conserva l'originale. Al
   `BRK` il task si sospende a fine istruzione corrente; con un PLC a scansione le uscite restano congelate (decisione
   aperta, analisi §4 punto 7).
