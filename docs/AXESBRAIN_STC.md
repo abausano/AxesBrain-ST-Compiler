@@ -170,6 +170,28 @@ Per i FB, come prima: gli input si scrivono nell'istanza, i `VAR_IN_OUT` come in
 `ADDR` dell'istanza e `CALLFB`; le uscite `=>` si leggono dall'istanza dopo la chiamata. L'istanza può essere
 calcolata (`cnt[i](...)`, array di FB).
 
+### 6.3 Oggetti: METHOD, PROPERTY, EXTENDS (10/11/2026)
+
+- **METHOD**: ogni metodo di un FB è una POU di tipo 4 (METHOD) di nome `FB.METODO`. Ha frame, parametri e
+  risultato come una FUNCTION, e l'istanza del suo FB (base `I`). Il chiamante mette in pila l'indirizzo
+  dell'istanza, poi gli argomenti come per una FUNCTION, poi `CALLM pou` oppure `CALLV`. I metodi stanno nel FB
+  prima del corpo (grammatica di STruC++). Nelle POUS la dimensione dell'istanza di un METHOD è 0.
+- **PROPERTY**: due metodi, `FB.__GET_P` (risultato `P`) e `FB.__SET_P` (un `VAR_INPUT P`): si ridefiniscono
+  come i metodi. Lettura `x.P`, `THIS.P` o `P` dentro il FB → GET; assegnamento → SET. Solo tipi elementari.
+- **EXTENDS**: l'istanza del figlio ha prima tutte le variabili del padre, agli stessi offset, poi le sue (i metodi
+  del padre lavorano anche sull'istanza del figlio). Chiamare il figlio esegue solo il suo corpo; `SUPER^()`
+  esegue quello del padre (`ADDR I 0` + `CALLFB padre`), `SUPER^.M()` il metodo del padre senza scelta dinamica.
+- **Tipo dell'istanza**: un FB con metodi, proprietà, `EXTENDS` o figli ha a offset 0 una `UDINT` nascosta
+  `__TYPE` con l'indice della sua POU (scritta nella `DATA`/`FRMI` come valore iniziale, assente dai simboli).
+- **Chiamata virtuale**: se un FB raggiungibile che discende dal tipo statico ridefinisce il metodo, il
+  compilatore scrive `CALLV u8 nargs, u16 n, {u16 tipo, u16 pou}·n` con le coppie tipo → implementazione di
+  tutti i tipi possibili; la VM legge `__TYPE` dall'istanza (sotto gli `nargs` argomenti) e sceglie. Altrimenti
+  `CALLM`. Vale per `x.M()`, `THIS.M()`, `M()` dentro il FB e per le proprietà; così un metodo del padre che chiama
+  un metodo ridefinito usa quello del figlio, anche con l'istanza passata come `VAR_IN_OUT` del tipo padre.
+- **Non ancora**: `INTERFACE`/`IMPLEMENTS`, `__NEW`/`__DELETE`, metodi e proprietà di tipo STRING/STRUCT/ARRAY,
+  metodo su un'istanza calcolata (`A[i].M()`), `VAR_INST`. Le variabili dei metodi stanno nel frame: nel debug
+  non si vedono, come quelle delle FUNCTION.
+
 ## 7. Bytecode
 
 Macchina a pila. Codice operativo da 1 byte, operandi immediati di lunghezza fissa per ogni codice (u8, u16, u32,
@@ -190,7 +212,7 @@ i32). Il tipo è parte del codice operativo (niente controllo dei tipi a run-tim
 | Bit e logica | `AND OR XOR NOT`, `SHL SHR ROL ROR` per dimensione | |
 | Conversioni | `I2F F2I_TRUNC F2I_ROUND F32_F64 F64_F32 …` | `REAL_TO_INT` arrotonda come la norma |
 | Salti | `JMP rel32`, `JZ rel32`, `JNZ rel32` | |
-| Chiamate | `CALL pou`, `CALLFB pou` (istanza in pila), `CALLM` (metodo), `RET` | |
+| Chiamate | `CALL pou`, `CALLFB pou` (istanza in pila), `CALLM` / `CALLV` (metodo, §6.3), `RET` | |
 | Native | `NATIVE idx` | §7.6 |
 | Sistema | `NOP`, `BRK` (breakpoint, §10), `TRAP code` | |
 
@@ -283,6 +305,8 @@ Immediati little-endian. `kind` è il kind di §3.4 della VM (1 U8 … 10 F64), 
 | 0x61 | CALLFB | u16 pou | indirizzo istanza → |
 | 0x62 | RET | | |
 | 0x63 | NATIVE | u16 indice NATV | parametri → (risultato) |
+| 0x64 | CALLM | u16 pou | indirizzo istanza, parametri → (risultato) |
+| 0x65 | CALLV | u8 nargs, u16 n, {u16 tipo, u16 pou}·n | come CALLM; la POU dal `__TYPE` dell'istanza (trappola 1 se manca) |
 | 0x70, 0x71 | BRK TRAP | —, u8 codice | |
 
 Funzioni `STR` (gli operandi STRING sono indirizzi del primo carattere; `d` è la destinazione, il risultato è
@@ -428,7 +452,7 @@ Prototipo 0.2 (formato `.stc` 0.2), fuori da AxesBrainSRV.
   compreso `GVL_0`) in un `.stc` di circa 310 KB che la VM carica. Unica nativa richiesta: `AB_TIME`. Provate a
   run-time (§10, `tests-stc/confronto/osc1.st` e `osc2.st`): circa 45 funzioni e FB di matematica, array,
   stringhe, date, bit, numeri complessi, regolazione e temporizzazione.
-- **Non ancora**: `WSTRING`, `ARRAY[*]`, metodi, interfacce, `EXTENDS`, proprietà, `VAR_INST`, `__NEW`/
+- **Non ancora**: `WSTRING`, `ARRAY[*]`, interfacce (metodi, proprietà ed `EXTENDS` dal 10/11/2026, §6.3), `VAR_INST`, `__NEW`/
   `__DELETE`, `RETAIN`, task a evento, `TIME_TO_STRING` e `DT_TO_STRING` nel formato IEC (ora numerici), STRING
   passate alle native di SRV, breakpoint e forzature (i dati per farli ci sono).
 - **Prove di confronto col back-end C++** (`tests-stc/confronto.mjs`, g++ 13.2 di WSL): stesso sorgente compilato

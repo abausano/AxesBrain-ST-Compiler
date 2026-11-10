@@ -134,6 +134,8 @@ export enum Op {
   CALLFB = 0x61, // u16 pou, instance address popped
   RET = 0x62,
   NATIVE = 0x63, // u16 native index
+  CALLM = 0x64, // u16 pou: method; arguments on top, instance address below them
+  CALLV = 0x65, // u8 nargs, u16 n, {u16 type, u16 pou}*n: virtual method by the __TYPE of the instance
   BRK = 0x70,
   TRAP = 0x71, // u8 code
 }
@@ -188,6 +190,8 @@ export enum PouKind {
   FUNCTION = 1,
   FUNCTION_BLOCK = 2,
   PROGRAM = 3,
+  /** METHOD of a FUNCTION_BLOCK (also PROPERTY GET/SET): frame like a FUNCTION, instance of the FB. */
+  METHOD = 4,
 }
 
 /** Located-variable areas and sizes (IOMP section). */

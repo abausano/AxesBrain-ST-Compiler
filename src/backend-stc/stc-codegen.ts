@@ -25,6 +25,7 @@ import type {
   FunctionBlockDeclaration,
   FunctionCallExpression,
   FunctionDeclaration,
+  MethodDeclaration,
   ProgramDeclaration,
   Statement,
   StructDefinition,
@@ -229,8 +230,12 @@ interface PouInfo {
   index: number;
   kind: PouKind;
   name: string;
-  decl: FunctionDeclaration | FunctionBlockDeclaration | ProgramDeclaration;
-  inst: Layout; // FB / PROGRAM instance
+  decl:
+    | FunctionDeclaration
+    | FunctionBlockDeclaration
+    | ProgramDeclaration
+    | MethodDeclaration;
+  inst: Layout; // FB / PROGRAM instance (METHOD: the instance of its FB)
   frame: Layout; // call frame
   params: Param[]; // FUNCTION parameters in declaration order
   ret?: VarSlot;
@@ -240,6 +245,21 @@ interface PouInfo {
   native?: string;
   hidden: number;
   laidOut: boolean;
+  /** OOP (10/11/2026): FB of a METHOD, base FB (EXTENDS), methods by name (also __GET_x / __SET_x of PROPERTY). */
+  owner?: PouInfo;
+  base?: PouInfo;
+  methods?: Map<string, PouInfo>;
+  /** Simple name of a METHOD (without the FB). */
+  member?: string;
+  isAbstract?: boolean;
+}
+
+/** A method call: how to push the instance address, static FB type, method, dynamic dispatch allowed. */
+interface MethodTarget {
+  pushThis: () => void;
+  fb: PouInfo;
+  m: PouInfo;
+  virtual: boolean;
 }
 
 /** A place in memory. Base P: its address is on the operand stack. */
@@ -554,6 +574,10 @@ export class StcGenerator {
     for (const f of ast.functionBlocks)
       this.declarePou(PouKind.FUNCTION_BLOCK, f);
     for (const p of ast.programs) this.declarePou(PouKind.PROGRAM, p);
+    // OOP: METHOD and PROPERTY of the FBs become POUs; EXTENDS links the base
+    for (const f of ast.functionBlocks)
+      if (f.extends) this.extended.add(f.extends);
+    for (const f of ast.functionBlocks) this.declareMembers(f);
 
     // Global segment: VAR_GLOBAL blocks, then program instances.
     const globalBlocks: VarBlock[] = [
@@ -657,7 +681,7 @@ export class StcGenerator {
     for (const i of instOffsets) {
       this.writeInstInit(this.data, i.pou.inst, i.off);
       for (const v of i.pou.inst.order) {
-        if (v.indirect) continue;
+        if (v.indirect || v.section === "HIDDEN") continue;
         const abs = i.off + v.off;
         this.symbolsFor(`${i.name}.${v.name}`, v.type, abs);
         if (v.address) this.addIo(v.address, v.type, abs);
@@ -669,6 +693,7 @@ export class StcGenerator {
       instOffsets.map((i) => i.pou),
       this.options.onlyReachable !== false,
     );
+    this.reachable = reachable;
     // Errors are collected POU by POU so that one compile reports them all.
     for (const p of this.pous) {
       if (!reachable.has(p)) continue;
@@ -712,7 +737,10 @@ export class StcGenerator {
         name: p.name,
         code: p.code,
         frameSize: p.laidOut ? align(p.frame.size, 8) : 0,
-        instSize: p.laidOut && p.kind !== PouKind.FUNCTION ? p.inst.size : 0,
+        instSize:
+          p.laidOut && p.kind !== PouKind.FUNCTION && p.kind !== PouKind.METHOD
+            ? p.inst.size
+            : 0,
         params: p.params.map((s) => ({
           kind: s.kind,
           off: s.byAddress ? (s.ptr?.off ?? s.slot.off) : s.slot.off,
@@ -737,6 +765,10 @@ export class StcGenerator {
     const visit = (p: PouInfo | undefined) => {
       if (!p || seen.has(p)) return;
       seen.add(p);
+      // OOP: an FB brings its methods and its base; a method its FB
+      if (p.methods) for (const m of p.methods.values()) visit(m);
+      if (p.base) visit(p.base);
+      if (p.owner) visit(p.owner);
       const walk = (n: unknown) => {
         if (!n || typeof n !== "object") return;
         if (Array.isArray(n)) {
@@ -1008,12 +1040,17 @@ export class StcGenerator {
 
   private declarePou(
     kind: PouKind,
-    decl: FunctionDeclaration | FunctionBlockDeclaration | ProgramDeclaration,
-  ) {
+    decl:
+      | FunctionDeclaration
+      | FunctionBlockDeclaration
+      | ProgramDeclaration
+      | MethodDeclaration,
+    name: string = decl.name,
+  ): PouInfo {
     const info: PouInfo = {
       index: this.pous.length,
       kind,
-      name: decl.name,
+      name,
       decl,
       inst: newLayout(),
       frame: newLayout(),
@@ -1035,7 +1072,98 @@ export class StcGenerator {
       }
     }
     this.pous.push(info);
-    this.pouByName.set(decl.name, info);
+    this.pouByName.set(name, info);
+    return info;
+  }
+
+  private extended = new Set<string>();
+  private reachable = new Set<PouInfo>();
+
+  /**
+   * METHOD and PROPERTY of an FB (10/11/2026): each METHOD is a POU "FB.M" (kind METHOD, frame like a FUNCTION,
+   * instance of the FB); a PROPERTY is the pair of methods __GET_P (returns P) and __SET_P (input P), so it can
+   * be overridden like a method.
+   */
+  private declareMembers(f: FunctionBlockDeclaration) {
+    const fb = this.pouByName.get(f.name)!;
+    fb.methods = new Map();
+    if (f.extends) {
+      const b = this.pouByName.get(f.extends);
+      if (!b || b.kind !== PouKind.FUNCTION_BLOCK)
+        this.fail(
+          `FUNCTION_BLOCK ${f.name}: la base ${f.extends} non è un FUNCTION_BLOCK`,
+          f,
+        );
+      fb.base = b;
+    }
+    fb.isAbstract = f.isAbstract;
+    const add = (member: string, m: MethodDeclaration) => {
+      if (fb.methods!.has(member))
+        this.fail(`${f.name}: ${member} dichiarato due volte`, m);
+      const info = this.declarePou(PouKind.METHOD, m, `${f.name}.${member}`);
+      info.owner = fb;
+      info.member = member;
+      info.isAbstract = m.isAbstract;
+      fb.methods!.set(member, info);
+    };
+    for (const m of f.methods ?? []) add(m.name, m);
+    for (const p of f.properties ?? []) {
+      const span = p.sourceSpan ? { sourceSpan: p.sourceSpan } : {};
+      if (p.getter)
+        add(`__GET_${p.name}`, {
+          kind: "MethodDeclaration",
+          name: p.name,
+          visibility: p.visibility,
+          isAbstract: false,
+          isFinal: false,
+          isOverride: false,
+          returnType: p.type,
+          varBlocks: [],
+          body: p.getter,
+          ...span,
+        } as MethodDeclaration);
+      if (p.setter)
+        add(`__SET_${p.name}`, {
+          kind: "MethodDeclaration",
+          name: `__SET_${p.name}`,
+          visibility: p.visibility,
+          isAbstract: false,
+          isFinal: false,
+          isOverride: false,
+          varBlocks: [
+            {
+              kind: "VarBlock",
+              blockType: "VAR_INPUT",
+              isConstant: false,
+              isRetain: false,
+              isNonRetain: false,
+              declarations: [
+                { kind: "VarDeclaration", names: [p.name], type: p.type },
+              ],
+            },
+          ],
+          body: p.setter,
+          ...span,
+        } as unknown as MethodDeclaration);
+    }
+  }
+
+  private isOop(f: FunctionBlockDeclaration): boolean {
+    return (
+      !!f.extends ||
+      (f.methods?.length ?? 0) > 0 ||
+      (f.properties?.length ?? 0) > 0 ||
+      this.extended.has(f.name)
+    );
+  }
+
+  private litInt(n: number): Expression {
+    return {
+      kind: "LiteralExpression",
+      literalType: "INT",
+      value: n,
+      rawValue: String(n),
+    } as unknown as Expression;
   }
 
   private layouting = new Set<PouInfo>();
@@ -1046,7 +1174,11 @@ export class StcGenerator {
       this.fail(`${info.name}: istanza ricorsiva di se stesso`, info.decl);
     this.layouting.add(info);
     const decl = info.decl;
-    if (info.kind === PouKind.FUNCTION) {
+    if (info.kind === PouKind.METHOD) {
+      this.layoutPou(info.owner!);
+      info.inst = info.owner!.inst;
+    }
+    if (info.kind === PouKind.FUNCTION || info.kind === PouKind.METHOD) {
       const fn = decl as FunctionDeclaration;
       const f = info.frame;
       if (fn.returnType && fn.returnType.name !== "VOID") {
@@ -1140,14 +1272,23 @@ export class StcGenerator {
       }
     } else {
       const fb = decl as FunctionBlockDeclaration;
-      if (
-        info.kind === PouKind.FUNCTION_BLOCK &&
-        (fb.extends || fb.methods?.length)
-      ) {
-        this.fail(
-          `FUNCTION_BLOCK ${info.name}: EXTENDS e metodi non ancora supportati`,
-          decl,
-        );
+      if (info.kind === PouKind.FUNCTION_BLOCK && info.base) {
+        // EXTENDS: the variables of the base first, at the same offsets (methods of the base work on it)
+        const b = info.base;
+        this.layoutPou(b);
+        const l = info.inst;
+        for (const v of b.inst.order) {
+          const nv =
+            v.name === "__TYPE" ? { ...v, init: this.litInt(info.index) } : v;
+          l.vars.set(v.name, nv);
+          l.order.push(nv);
+        }
+        l.size = b.inst.size;
+        l.align = b.inst.align;
+      } else if (info.kind === PouKind.FUNCTION_BLOCK && this.isOop(fb)) {
+        // hidden type of the instance at offset 0 (CALLV chooses the method by it)
+        const s = this.addVar(info.inst, "__TYPE", T_UDINT, "HIDDEN");
+        s.init = this.litInt(info.index);
       }
       for (const b of decl.varBlocks) {
         for (const d of b.declarations) {
@@ -1515,7 +1656,7 @@ export class StcGenerator {
       case "fb": {
         const p = this.pouByName.get(t.name)!;
         for (const v of p.inst.order)
-          if (!v.indirect)
+          if (!v.indirect && v.section !== "HIDDEN")
             this.symbolsFor(`${name}.${v.name}`, v.type, abs + v.off);
         return;
       }
@@ -1793,7 +1934,228 @@ export class StcGenerator {
       this.usedGlobals.add(name);
       return { slot: g, base: Base.G };
     }
+    if (name === "THIS") {
+      const o = this.ownerFb();
+      if (o)
+        return {
+          slot: {
+            name,
+            type: { t: "fb", name: o.name },
+            off: 0,
+            section: "HIDDEN",
+          },
+          base: Base.I,
+        };
+    }
     return undefined;
+  }
+
+  // -------------------------------------------------------------------------
+  // OOP: methods, properties, SUPER (10/11/2026)
+  // -------------------------------------------------------------------------
+
+  /** FB whose instance is the current one (FB body or its METHOD). */
+  private ownerFb(): PouInfo | undefined {
+    const c = this.cur;
+    if (!c) return undefined;
+    if (c.kind === PouKind.FUNCTION_BLOCK) return c;
+    if (c.kind === PouKind.METHOD) return c.owner;
+    return undefined;
+  }
+
+  /** Method `name` of the FB or of its bases. */
+  private methodOf(fb: PouInfo, name: string): PouInfo | undefined {
+    for (let c: PouInfo | undefined = fb; c; c = c.base) {
+      const m = c.methods?.get(name);
+      if (m) return m;
+    }
+    return undefined;
+  }
+
+  private descends(c: PouInfo, fb: PouInfo): boolean {
+    for (let x: PouInfo | undefined = c; x; x = x.base)
+      if (x === fb) return true;
+    return false;
+  }
+
+  /** "inst.M", "THIS.M", "SUPER.M" or "M" inside an FB, when M is a method. */
+  private methodTarget(e: FunctionCallExpression): MethodTarget | undefined {
+    if (e.instance) return undefined;
+    const name = e.functionName;
+    const own = this.ownerFb();
+    const dot = name.lastIndexOf(".");
+    const thisAddr = () => this.addr(Base.I, 0);
+    let fb: PouInfo | undefined;
+    let mname: string;
+    let pushThis: () => void;
+    let virtual = true;
+    if (dot < 0) {
+      if (!own || this.findVar(name)) return undefined;
+      const fn = this.pouByName.get(name);
+      if (fn && fn.kind !== PouKind.METHOD) return undefined;
+      fb = own;
+      mname = name;
+      pushThis = thisAddr;
+    } else {
+      const head = name.slice(0, dot);
+      mname = name.slice(dot + 1);
+      if (head === "SUPER") {
+        if (!own?.base) return undefined;
+        fb = own.base;
+        pushThis = thisAddr;
+        virtual = false;
+      } else {
+        const v = this.findVar(head);
+        if (!v || v.slot.type.t !== "fb") return undefined;
+        fb = this.pouByName.get(v.slot.type.name);
+        const vv = v;
+        pushThis = () => {
+          let p: Place = {
+            base: vv.base,
+            off: vv.slot.off,
+            type: vv.slot.type,
+          };
+          if (vv.slot.indirect) p = this.derefSlot(p);
+          this.pushAddr(p);
+        };
+      }
+    }
+    if (!fb) return undefined;
+    this.layoutPou(fb);
+    const m = this.methodOf(fb, mname);
+    if (!m) return undefined;
+    return { pushThis, fb, m, virtual };
+  }
+
+  /**
+   * Call a method: instance address, arguments, then CALLM (one implementation for the static type and all its
+   * reachable descendants) or CALLV with the table type -> implementation.
+   */
+  private genMethodInvoke(
+    t: MethodTarget,
+    pushArgs: () => void,
+    node: unknown,
+  ) {
+    this.layoutPou(t.m);
+    t.pushThis();
+    pushArgs();
+    const pairs: Array<[number, number]> = [];
+    let diverse = false;
+    if (t.virtual) {
+      for (const c of this.pous) {
+        if (c.kind !== PouKind.FUNCTION_BLOCK || !this.descends(c, t.fb))
+          continue;
+        if (c !== t.fb && !this.reachable.has(c)) continue;
+        if (c.isAbstract) continue;
+        const impl = this.methodOf(c, t.m.member!);
+        if (!impl || impl.isAbstract) continue;
+        this.layoutPou(impl);
+        if (impl !== t.m) diverse = true;
+        pairs.push([c.index, impl.index]);
+      }
+    }
+    if (!diverse) {
+      if (t.m.isAbstract)
+        this.fail(`${t.m.name}: metodo astratto senza implementazione`, node);
+      this.code.op(Op.CALLM);
+      this.code.u16(t.m.index);
+      return;
+    }
+    this.code.op(Op.CALLV);
+    this.code.u8(t.m.params.length);
+    this.code.u16(pairs.length);
+    for (const [ty, pou] of pairs) {
+      this.code.u16(ty);
+      this.code.u16(pou);
+    }
+  }
+
+  /** SUPER^(): body of the base FB on the current instance. */
+  private genSuperBody(e: FunctionCallExpression) {
+    const own = this.ownerFb();
+    if (!own?.base)
+      this.fail("SUPER^() fuori da un FUNCTION_BLOCK con EXTENDS", e);
+    if (e.arguments.length)
+      this.fail("SUPER^() con argomenti non supportato", e);
+    this.layoutPou(own.base);
+    this.addr(Base.I, 0);
+    this.code.op(Op.CALLFB);
+    this.code.u16(own.base.index);
+  }
+
+  /** "inst.P", "THIS.P" or "P" inside an FB, when P is a PROPERTY. */
+  private propertyTarget(
+    e: VariableExpression,
+  ): { pushThis: () => void; fb: PouInfo; name: string } | undefined {
+    if (e.subscripts.length || e.isDereference) return undefined;
+    const chain = this.accessChain(e);
+    let fb: PouInfo | undefined;
+    let pname: string;
+    let pushThis: () => void;
+    if (chain.length === 0) {
+      const own = this.ownerFb();
+      if (!own || this.findVar(e.name)) return undefined;
+      fb = own;
+      pname = e.name;
+      pushThis = () => this.addr(Base.I, 0);
+    } else if (chain.length === 1 && chain[0]!.kind === "field") {
+      const v = this.findVar(e.name);
+      if (!v || v.slot.type.t !== "fb") return undefined;
+      fb = this.pouByName.get(v.slot.type.name);
+      pname = chain[0]!.name;
+      if (!fb || this.fbInst(fb.name).vars.has(pname)) return undefined;
+      const vv = v;
+      pushThis = () => {
+        let p: Place = { base: vv.base, off: vv.slot.off, type: vv.slot.type };
+        if (vv.slot.indirect) p = this.derefSlot(p);
+        this.pushAddr(p);
+      };
+    } else return undefined;
+    if (!fb) return undefined;
+    this.layoutPou(fb);
+    if (
+      !this.methodOf(fb, `__GET_${pname}`) &&
+      !this.methodOf(fb, `__SET_${pname}`)
+    )
+      return undefined;
+    return { pushThis, fb, name: pname };
+  }
+
+  /** Read a PROPERTY (GET): leaves the scalar value on the stack. */
+  private genPropertyGet(e: VariableExpression): ScalarT | undefined {
+    const pt = this.propertyTarget(e);
+    if (!pt) return undefined;
+    const g = this.methodOf(pt.fb, `__GET_${pt.name}`);
+    if (!g) this.fail(`Proprietà ${pt.name} senza GET`, e);
+    this.layoutPou(g);
+    if (!g.ret || !isScalar(g.ret.type))
+      this.fail(`Proprietà ${pt.name}: solo tipi elementari per ora`, e);
+    this.genMethodInvoke(
+      { pushThis: pt.pushThis, fb: pt.fb, m: g, virtual: true },
+      () => {},
+      e,
+    );
+    return g.ret.type;
+  }
+
+  /** Write a PROPERTY (SET); false if the target is not a property. */
+  private genPropertySet(target: Expression, value: Expression): boolean {
+    if (target.kind !== "VariableExpression") return false;
+    const pt = this.propertyTarget(target);
+    if (!pt) return false;
+    const s = this.methodOf(pt.fb, `__SET_${pt.name}`);
+    if (!s) this.fail(`Proprietà ${pt.name} senza SET`, target);
+    this.layoutPou(s);
+    const prm = s.params[0]!;
+    if (!isScalar(prm.slot.type))
+      this.fail(`Proprietà ${pt.name}: solo tipi elementari per ora`, target);
+    const vt = prm.slot.type;
+    this.genMethodInvoke(
+      { pushThis: pt.pushThis, fb: pt.fb, m: s, virtual: true },
+      () => this.genExpr(value, vt),
+      target,
+    );
+    return true;
   }
 
   /** A variable that must not need a computed address (FOR control variable). */
@@ -1914,6 +2276,14 @@ export class StcGenerator {
 
   /** Static type of a variable expression, without emitting code. */
   private varType(e: VariableExpression): VT | undefined {
+    const pt = this.propertyTarget(e);
+    if (pt) {
+      const g =
+        this.methodOf(pt.fb, `__GET_${pt.name}`) ??
+        this.methodOf(pt.fb, `__SET_${pt.name}`)!;
+      this.layoutPou(g);
+      return g.ret?.type ?? g.params[0]?.slot.type;
+    }
     const v = this.findVar(e.name);
     if (!v) {
       if (e.typedLiteral && e.fieldAccess.length === 1)
@@ -1987,6 +2357,7 @@ export class StcGenerator {
   }
 
   private genAssign(target: Expression, value: Expression) {
+    if (this.genPropertySet(target, value)) return;
     const place = this.genPlaceExpr(target);
     if (isBitPlace(place)) return this.genBitWrite(place, value);
     const t = place.type;
@@ -2440,6 +2811,8 @@ export class StcGenerator {
         return t;
       }
       case "VariableExpression": {
+        const pg = this.genPropertyGet(e);
+        if (pg) return pg;
         const v = this.findVar(e.name);
         if (!v) {
           const c = this.tryConst(e);
@@ -2642,6 +3015,11 @@ export class StcGenerator {
   }
 
   private callType(e: FunctionCallExpression): VT | undefined {
+    const mt = this.methodTarget(e);
+    if (mt) {
+      this.layoutPou(mt.m);
+      return mt.m.ret?.type;
+    }
     const name = e.functionName;
     const user = this.pouByName.get(name);
     if (user && user.kind === PouKind.FUNCTION) {
@@ -2738,6 +3116,21 @@ export class StcGenerator {
     e: FunctionCallExpression,
     want?: ScalarT,
   ): "value" | "none" | ScalarT {
+    if (e.functionName === "SUPER") {
+      this.genSuperBody(e);
+      return "none";
+    }
+    const mt = this.methodTarget(e);
+    if (mt) {
+      this.layoutPou(mt.m);
+      if (mt.m.ret && !isScalar(mt.m.ret.type))
+        this.fail(
+          `${mt.m.name}: metodi che restituiscono STRING, STRUCT o ARRAY non ancora supportati`,
+          e,
+        );
+      this.genMethodInvoke(mt, () => this.pushArgs(e, mt.m), e);
+      return mt.m.ret ? "value" : "none";
+    }
     const pou = this.pouByName.get(e.functionName);
     if (pou && pou.kind === PouKind.FUNCTION) {
       this.layoutPou(pou);
@@ -2785,6 +3178,18 @@ export class StcGenerator {
 
   /** Push the arguments of a user FUNCTION and call it. */
   private genUserCall(e: FunctionCallExpression, pou: PouInfo) {
+    this.pushArgs(e, pou);
+    if (pou.native) {
+      this.code.op(Op.NATIVE);
+      this.code.u16(this.nativeByName.get(pou.name)!);
+    } else {
+      this.code.op(Op.CALL);
+      this.code.u16(pou.index);
+    }
+  }
+
+  /** Push the arguments of a FUNCTION or METHOD in parameter order. */
+  private pushArgs(e: FunctionCallExpression, pou: PouInfo) {
     const args = this.orderArgs(e, pou.params);
     pou.params.forEach((prm, i) => {
       const a = args[i];
@@ -2821,13 +3226,6 @@ export class StcGenerator {
         }
       }
     });
-    if (pou.native) {
-      this.code.op(Op.NATIVE);
-      this.code.u16(this.nativeByName.get(pou.name)!);
-    } else {
-      this.code.op(Op.CALL);
-      this.code.u16(pou.index);
-    }
   }
 
   private arg(e: FunctionCallExpression, i: number, name?: string): Expression {

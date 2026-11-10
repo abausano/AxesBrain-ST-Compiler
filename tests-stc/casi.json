@@ -210,5 +210,41 @@
       "--print",
       "P.K.Y"
     ]
+  },
+  {
+    "nome": "oop1",
+    "sorgenti": [
+      "oop1.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "60",
+      "--print",
+      "PROVA.GIRI,PROVA.R1,PROVA.R2,PROVA.D,PROVA.C.VALORE,PROVA.C.CHIAMATE,PROVA.V.VALORE,PROVA.V.CHIAMATE,PROVA.V.EXTRA"
+    ]
+  },
+  {
+    "nome": "oop2",
+    "sorgenti": [
+      "oop2.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "30",
+      "--print",
+      "PROVA2.M1.A,PROVA2.M1.P,PROVA2.M1.T,PROVA2.M2.A,PROVA2.M2.P,PROVA2.M2.T,PROVA2.C.LATO,PROVA2.K.AREAQ"
+    ]
+  },
+  {
+    "nome": "oop3",
+    "sorgenti": [
+      "oop3.st"
+    ],
+    "argomenti": [
+      "--ms",
+      "10",
+      "--print",
+      "PROVA3.RA,PROVA3.RB"
+    ]
   }
 ]
