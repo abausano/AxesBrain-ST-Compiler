@@ -74,7 +74,7 @@ writeFileSync(
     "Fork di STruC++ (Autonomy) con il back-end .stc di AB&T: GPL-3.0 (COPYING, LICENSE). I file .stc prodotti",
     "si possono distribuire come si vuole: permesso aggiuntivo della sezione 7, nell'intestazione dei sorgenti di",
     "src/backend-stc. COPYING.RUNTIME è l'eccezione di STruC++ per la sua libreria di runtime C++.",
-    "Sorgenti: https://github.com/abausano/AxesBrain-ST-Compiler, ramo axesbrain, o su richiesta ad AB&T.",
+    "Sorgenti: https://github.com/abausano/AxesBrain-ST-Compiler, ramo axesbrain.",
     "",
     "Uso: axesbrain-stc.exe programma.st [librerie.st ...] [AxesBrainIO.st] -o programma.stc [--json esito.json]",
     "     [--lib archivio.stlib] [-D NOME=valore] [--tutto] [--tutti-io]",
